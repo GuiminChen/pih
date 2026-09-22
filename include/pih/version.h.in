@@ -1,0 +1,12 @@
+#pragma once
+
+#define PIH_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define PIH_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define PIH_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define PIH_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace pih {
+
+const char* version() noexcept;
+
+}  // namespace pih

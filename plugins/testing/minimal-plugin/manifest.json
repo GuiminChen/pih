@@ -1,0 +1,19 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.testing.minimal",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "native_plugin",
+  "plugin_abi": "pih.native-plugin.v1",
+  "entry_symbol": "pih_plugin_entry_v1",
+  "kernel_packs": [],
+  "provides": [
+    {
+      "capability_id": "testing.minimal.v1",
+      "contract_id": "pih.testing.minimal.v1",
+      "scope": "activation",
+      "cardinality": "exactly_one",
+      "threading_model": "single_threaded"
+    }
+  ],
+  "requires": []
+}

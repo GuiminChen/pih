@@ -1,0 +1,20 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.model.qwen3",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "native_plugin",
+  "plugin_abi": "pih.native-plugin.v1",
+  "entry_symbol": "pih_plugin_entry_v1",
+  "provides": [{"capability_id":"inference.text.v2","contract_id":"pih.inference.text.v2","scope":"activation","cardinality":"exactly_one","threading_model":"serialized"}],
+  "requires": [
+    {"capability_id":"artifact.authenticated-snapshot.v1","contract_id":"pih.artifact.authenticated-snapshot.v1","scope":"activation","cardinality":"exactly_one"},
+    {"capability_id":"device.cuda-async.v1","contract_id":"pih.device.cuda-async.v1","scope":"process","cardinality":"exactly_one"},
+    {"capability_id":"device.cuda-resources.v1","contract_id":"pih.device.cuda-resources.v1","scope":"process","cardinality":"exactly_one"},
+    {"capability_id":"device.cuda-memory.v1","contract_id":"pih.device.cuda-memory.v1","scope":"process","cardinality":"exactly_one"},
+    {"capability_id":"device.cuda-runtime.v1","contract_id":"pih.device.cuda-runtime.v1","scope":"process","cardinality":"exactly_one"},
+    {"capability_id":"execution.default.v1","contract_id":"pih.execution.default.v1","scope":"activation","cardinality":"exactly_one"},
+    {"capability_id":"execution.controller.v1","contract_id":"pih.execution.controller.v1","scope":"activation","cardinality":"exactly_one"},
+    {"capability_id":"pih.kernels.qwen3.sm89","contract_id":"pih.qwen-kernels.v1","scope":"activation","cardinality":"zero_or_one"},
+    {"capability_id":"pih.kernels.qwen3.sm90","contract_id":"pih.qwen-kernels.v1","scope":"activation","cardinality":"zero_or_one"}
+  ]
+}

@@ -1,0 +1,6 @@
+{
+    global:
+        pih_kernel_pack_identity_v1_get;
+        pih_kernel_pack_api_v1_get;
+    local: *;
+};

@@ -1,0 +1,57 @@
+name: cpu-contract
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-cpu-contract:
+    name: Linux C++ CPU contracts and client-only wheel
+    runs-on: ubuntu-24.04
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build libssl-dev libgtest-dev
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements/ci-cpu.txt
+      - name: Verify tools and public documentation
+        run: |
+          python -m pytest tests/tools
+          python tools/verify_public_docs.py
+      - name: Configure CPU-only native build
+        run: |
+          cmake -S . -B build/linux-cpu -G Ninja \
+            -DPIH_DEPLOYMENT_PROFILE=custom \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPIH_ENABLE_CUDA=OFF \
+            -DPIH_ENABLE_NCCL=OFF \
+            -DPIH_BUILD_TESTS=OFF \
+            -DPIH_BUILD_NATIVE_CONTRACT_TESTS=ON \
+            -DPIH_BUILD_PYTHON=OFF \
+            -DPIH_BUILD_MONOLITH=OFF \
+            -DPIH_BUILD_WORKER=OFF \
+            -DPIH_BUILD_PLUGINS=OFF
+      - name: Build and run C++ contract suite
+        run: |
+          cmake --build build/linux-cpu --target pih-native-contracts --parallel 2
+          ctest --test-dir build/linux-cpu --output-on-failure --parallel 2
+      - name: Build and install client-only wheel in isolation
+        shell: bash
+        run: |
+          python -m pip wheel . --no-deps --wheel-dir dist
+          python -m venv "$RUNNER_TEMP/pih-wheel-check"
+          "$RUNNER_TEMP/pih-wheel-check/bin/python" -m pip install --no-index --no-deps dist/pih-*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/pih-wheel-check/bin/python" -c 'import importlib.util, pih_client; assert importlib.util.find_spec("pih") is None; assert importlib.util.find_spec("_pih") is None; print(pih_client.__file__)'

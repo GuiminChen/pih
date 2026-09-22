@@ -1,0 +1,50 @@
+# Editors and local tooling
+/.idea/
+/.vscode/
+/.tooling/
+
+# Python
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.pytest-wheel-cache/
+/.ruff_cache/
+/.mypy_cache/
+/.venv/
+/venv/
+*.egg-info/
+/dist/
+
+# Native builds and generated packages
+/build/
+/out/
+/cmake-build-*/
+*.so
+*.dll
+*.dylib
+*.exe
+
+# Local scratch and runtime output
+/.tmp/
+/deliveries/
+*.log
+*.pid
+
+# Workspace-only migration and reference material is never part of the public tree
+/python/pih/
+/bindings/python/
+/plugins/model-deepseek-v41-reference/
+/tests/python/
+/tests/hardware/
+/specs/
+/docs/architecture/
+/docs/implementation/
+/docs/superpowers/
+/docs/validation/
+
+# Model artifacts must remain outside the repository
+*.safetensors
+*.gguf
+*.onnx
+*.pt
+*.pth

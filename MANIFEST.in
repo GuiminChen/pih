@@ -1,0 +1,4 @@
+# The Python sdist is also client-only; native source is a separate inventory.
+global-exclude *
+include pyproject.toml MANIFEST.in README.md LICENSE THIRD_PARTY_NOTICES.md
+recursive-include python/pih_client *.py

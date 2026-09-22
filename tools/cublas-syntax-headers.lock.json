@@ -1,0 +1,10 @@
+{
+  "schema": "pih.cublas_syntax_headers.v1",
+  "version": "13.4.1.3",
+  "cuda_range": ">=13.2,<13.3.0a0",
+  "source_metadata": "https://api.anaconda.org/package/nvidia/libcublas-dev",
+  "url": "https://api.anaconda.org/download/nvidia/libcublas-dev/13.4.1.3/linux-64/libcublas-dev-13.4.1.3-h4892c30_0.conda",
+  "bytes": 90081,
+  "sha256": "d963c008080e14a1da361ad5d654ac613b43ac2a708c79e4697c83e4b29d947b",
+  "payload": "pkg-libcublas-dev-13.4.1.3-h4892c30_0.tar.zst"
+}

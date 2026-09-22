@@ -1,0 +1,114 @@
+name: native-v41-build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  weights-linux-link:
+    name: Linux V4.1 CPU conversion and reshard link (no execution)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install CPU build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake ninja-build g++ libssl-dev libicu-dev binutils ripgrep
+      - name: Build both tools through documented entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/build/v41-weights
+          bash deploy/run-v41-native.sh build-weights "$PWD/out/build/v41-weights" 2 \
+            2>&1 | tee out/build/v41-weights/build.log
+      - name: Inspect both ELF dependency boundaries without execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in pih-v41-convert pih-v41-reshard pih-v41-token-map; do
+            readelf --wide --dynamic "out/build/v41-weights/$command" \
+              > "out/build/v41-weights/$command.dynamic.txt"
+            if rg -i 'NEEDED.*(libcuda|libcudart|libcublas|libnccl|libpython)' "out/build/v41-weights/$command.dynamic.txt"; then
+              echo 'Offline command unexpectedly links a GPU or Python runtime.' >&2
+              exit 1
+            fi
+          done
+          bash -n deploy/run-v41-native.sh
+      - name: Preserve compile and link evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-v41-weights-build-evidence
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            out/build/v41-weights/build.log
+            out/build/v41-weights/CMakeCache.txt
+            out/build/v41-weights/compile_commands.json
+            out/build/v41-weights/*.dynamic.txt
+  supervisor-linux-link:
+    name: Linux V4.1 CPU supervisor compile and link (no execution)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install CPU build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake ninja-build g++ libssl-dev libicu-dev binutils ripgrep
+      - name: Configure without CUDA, Python or monolithic runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/build/v41-supervisor
+          {
+            cmake --version
+            c++ --version
+            uname -a
+            dpkg-query --show cmake ninja-build g++ libssl-dev libicu-dev binutils
+          } > out/build/v41-supervisor/build-environment.txt
+          cmake -S . -B out/build/v41-supervisor -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-Map,$PWD/out/build/v41-supervisor/supervisor-link.map" \
+            -DPIH_DEPLOYMENT_PROFILE=custom \
+            -DPIH_ENABLE_CUDA=OFF -DPIH_ENABLE_NCCL=OFF \
+            -DPIH_BUILD_NATIVE_ENGRAM_NCCL=OFF \
+            -DPIH_BUILD_MONOLITH=OFF -DPIH_BUILD_PYTHON=OFF \
+            -DPIH_BUILD_TESTS=OFF -DPIH_BUILD_PLUGINS=OFF \
+            -DPIH_BUILD_WORKER=OFF -DPIH_BUILD_TOKENIZER_TOOLS=ON \
+            -DPIH_BUILD_ARTIFACT_TOOLS=OFF \
+            2>&1 | tee out/build/v41-supervisor/configure.log
+      - name: Compile and link supervisor without running it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build out/build/v41-supervisor --target pih-v41-supervisor --parallel 2 --verbose \
+            2>&1 | tee out/build/v41-supervisor/build.log
+      - name: Inspect ELF dependency boundary without execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          readelf --wide --dynamic out/build/v41-supervisor/pih-v41-supervisor \
+            > out/build/v41-supervisor/dynamic-dependencies.txt
+          if rg -i 'NEEDED.*(libcuda|libcudart|libnccl|libpython)' out/build/v41-supervisor/dynamic-dependencies.txt; then
+            echo 'CPU supervisor unexpectedly links a GPU or Python runtime.' >&2
+            exit 1
+          fi
+          bash -n deploy/run-v41-native.sh
+      - name: Preserve build evidence (not a qualified binary release)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-v41-supervisor-build-evidence
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            out/build/v41-supervisor/build-environment.txt
+            out/build/v41-supervisor/configure.log
+            out/build/v41-supervisor/build.log
+            out/build/v41-supervisor/CMakeCache.txt
+            out/build/v41-supervisor/compile_commands.json
+            out/build/v41-supervisor/supervisor-link.map
+            out/build/v41-supervisor/dynamic-dependencies.txt

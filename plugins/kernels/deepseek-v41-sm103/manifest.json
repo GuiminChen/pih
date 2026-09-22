@@ -1,0 +1,13 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.kernels.deepseek-v41.sm103",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "kernel_pack",
+  "pack_abi": "pih.deepseek-v41-sm103-kernels.v1",
+  "sm_architecture": "sm103",
+  "binary": "lib/pih_kernels_deepseek_v41_sm103.so",
+  "supports_model_abi": [
+    "pih.model.deepseek-v41.v1"
+  ]
+}
+

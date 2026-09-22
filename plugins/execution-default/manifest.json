@@ -1,0 +1,25 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.execution.default",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "native_plugin",
+  "plugin_abi": "pih.native-plugin.v1",
+  "entry_symbol": "pih_plugin_entry_v1",
+  "provides": [
+    {
+      "capability_id": "execution.default.v1",
+      "contract_id": "pih.execution.default.v1",
+      "scope": "activation",
+      "cardinality": "exactly_one",
+      "threading_model": "concurrent"
+    },
+    {
+      "capability_id": "execution.controller.v1",
+      "contract_id": "pih.execution.controller.v1",
+      "scope": "activation",
+      "cardinality": "exactly_one",
+      "threading_model": "concurrent"
+    }
+  ],
+  "requires": []
+}

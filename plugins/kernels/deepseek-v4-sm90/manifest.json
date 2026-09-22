@@ -1,0 +1,10 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.kernels.deepseek-v4.sm90",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "kernel_pack",
+  "pack_abi": "pih.deepseek-sm90-kernel-pack.v1",
+  "sm_architecture": "sm90",
+  "binary": "lib/pih_kernels_deepseek_v4_sm90.so",
+  "supports_model_abi": ["pih.model.deepseek-v4-flash.v1"]
+}

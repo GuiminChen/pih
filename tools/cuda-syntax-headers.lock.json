@@ -1,0 +1,31 @@
+{
+  "schema": "pih.cuda_syntax_headers.v1",
+  "cuda_version": "13.2.86",
+  "packages": [
+    {
+      "name": "nvidia-cuda-runtime",
+      "bytes": 2323576,
+      "sha256": "3498247680dfddce31bad102af7e3e26fc795342a3cac64722bb0fa95e7f60f0",
+      "url": "https://files.pythonhosted.org/packages/70/c6/8f8c5e893d183082ea78f973aebc7ebc845ee219d68bddac73b0f62490fe/nvidia_cuda_runtime-13.2.86-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    },
+    {
+      "name": "nvidia-cuda-crt",
+      "bytes": 133300,
+      "sha256": "e3ab08801bf9b1e6dc979275d25e816bb5000521b648e19c324d5eef0c79f1da",
+      "url": "https://files.pythonhosted.org/packages/65/9f/404307a23ffd26ef2e3661bf79ffed0e3ea245a42cb6b74c5e4d1bb93ab2/nvidia_cuda_crt-13.2.86-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    },
+    {
+      "name": "nvidia-cuda-cccl",
+      "bytes": 3600135,
+      "sha256": "35da671cf0cecd3539da214a11bb8e7634366c9e950da9c5feecf6c490a65b20",
+      "url": "https://files.pythonhosted.org/packages/ae/a4/d4eb1467bc07dd9d3d4291abf7cfd7c353eb522ca1ef7951b0aacb4f932c/nvidia_cuda_cccl-13.2.86-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+    },
+    {
+      "name": "nvidia-curand",
+      "version": "10.4.2.66",
+      "bytes": 59954122,
+      "sha256": "9bb3796a2f6223454b2e326e3d7572c1500cfa4d629de827676b4eeecd30ab0c",
+      "url": "https://files.pythonhosted.org/packages/c9/ca/9701cd19be422d6c1e1a1473c89b20c88c97a53be9cda3afd9627b482427/nvidia_curand-10.4.2.66-py3-none-manylinux_2_27_x86_64.whl"
+    }
+  ]
+}

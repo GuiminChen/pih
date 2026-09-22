@@ -1,0 +1,7 @@
+set(content "#include <string_view>\nstd::string_view pih_expected_qwen_cubin_sha256(unsigned sm) {\n  switch (sm) {\n")
+foreach(sm IN LISTS ARCHITECTURES)
+    file(SHA256 "${CUBIN_DIRECTORY}/sm_${sm}/qwen_bf16_primitives.cubin" digest)
+    string(APPEND content "    case ${sm}: return \"${digest}\";\n")
+endforeach()
+string(APPEND content "    default: return {};\n  }\n}\n")
+file(WRITE "${OUTPUT}" "${content}")

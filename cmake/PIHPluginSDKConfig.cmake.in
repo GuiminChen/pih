@@ -1,0 +1,3 @@
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/PIHPluginSDKTargets.cmake")
+check_required_components(PIHPluginSDK)

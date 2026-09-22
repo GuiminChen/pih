@@ -1,0 +1,35 @@
+name: native-release-build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile-link-package:
+    # Maintainer-managed CPU build host with real CUDA 13.2/NCCL development
+    # libraries and NVIDIA link dependencies. Never executes a GPU program.
+    runs-on: [self-hosted, linux, x64, cuda-13-2]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [qwen-4090d, qwen-h100, deepseek-pp1, deepseek-b300]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Production compile, device images, final link and install
+        run: |
+          python3 deploy/build-release.py '${{ matrix.profile }}' \
+            --build-dir "$RUNNER_TEMP/${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}-build" \
+            --bundle "$RUNNER_TEMP/${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}-bundle"
+      - name: Package explicit installation without executing it
+        run: |
+          python3 tools/verify_native_release.py \
+            --root "$RUNNER_TEMP/${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}-bundle" \
+            --library-root /lib --library-root /usr/lib --library-root /usr/local/cuda/lib64 \
+            --report "$RUNNER_TEMP/${{ matrix.profile }}-inspection.json"
+          python3 tools/package_release.py native \
+            --root "$RUNNER_TEMP/${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.profile }}-bundle" \
+            --output "$RUNNER_TEMP/${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.profile }}
+          path: ${{ runner.temp }}/${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz

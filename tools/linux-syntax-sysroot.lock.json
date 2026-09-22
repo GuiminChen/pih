@@ -1,0 +1,11 @@
+{
+  "schema": "pih.linux_syntax_headers.v1",
+  "source_index": "https://archive.ubuntu.com/ubuntu/dists/noble/main/binary-amd64/Packages.xz",
+  "packages": [
+    {"name":"libc6-dev","version":"2.39-0ubuntu8","path":"pool/main/g/glibc/libc6-dev_2.39-0ubuntu8_amd64.deb","sha256":"1f03b79223d9cf1a6ed3a648f6942619dcb97b2884dba8fd12e262b6771e247a","bytes":2123840},
+    {"name":"libicu-dev","version":"74.2-1ubuntu3","path":"pool/main/i/icu/libicu-dev_74.2-1ubuntu3_amd64.deb","sha256":"18dc7c1730ad8006167f0e25289adc824b11b4cfce1baef0a1c1fb8dc044d945","bytes":11893158},
+    {"name":"libstdc++-13-dev","version":"13.2.0-23ubuntu4","path":"pool/main/g/gcc-13/libstdc++-13-dev_13.2.0-23ubuntu4_amd64.deb","sha256":"0e34b7a6ad0d9db6c718301a0c30a077590decbb31099d0fd6ac957222d77a94","bytes":2399142},
+    {"name":"linux-libc-dev","version":"6.8.0-31.31","path":"pool/main/l/linux/linux-libc-dev_6.8.0-31.31_amd64.deb","sha256":"21c631ba4da3d38d92a133e28a8a14278e1e00174ed135a20661d1e532e05ca5","bytes":1597672},
+    {"name":"libssl-dev","version":"3.0.13-0ubuntu3","path":"pool/main/o/openssl/libssl-dev_3.0.13-0ubuntu3_amd64.deb","sha256":"7135fe0e6a78b15fe4e30660765b67887ae33b36a7902293c2d7fddc09e13397","bytes":2406170}
+  ]
+}

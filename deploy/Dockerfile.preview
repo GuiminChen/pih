@@ -1,0 +1,29 @@
+# CPU-only developer preview. This image exercises plugin loading, not inference.
+FROM ubuntu:24.04 AS build
+RUN apt-get update && apt-get install --yes --no-install-recommends \
+    cmake ninja-build g++ libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN cmake --preset phase1-native \
+    && cmake --build --preset phase1-native --parallel 2 \
+    && cmake --install out/build/phase1-native --prefix /sdk --component pih-plugin-sdk \
+    && cmake -S examples/external-plugin -B /external-build -G Ninja \
+       -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/sdk \
+       -DPIH_WORKER=/src/out/build/phase1-native/pih-worker \
+    && cmake --build /external-build --parallel 2 \
+    && ctest --test-dir /external-build --output-on-failure \
+    && cmake --build /external-build --target smoke
+
+FROM ubuntu:24.04 AS runtime
+RUN apt-get update && apt-get install --yes --no-install-recommends \
+    libssl3t64 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/pih
+COPY --from=build /src/out/build/phase1-native/pih-worker ./bin/pih-worker
+COPY --from=build /src/out/build/phase1-native/lib/ ./lib/
+COPY --from=build /src/out/build/phase1-native/pih-minimal-development.lock ./minimal.lock
+COPY --from=build /src/LICENSE /src/THIRD_PARTY_NOTICES.md ./licenses/
+USER 65532:65532
+ENTRYPOINT ["/opt/pih/bin/pih-worker"]
+CMD ["--lock", "/opt/pih/minimal.lock"]

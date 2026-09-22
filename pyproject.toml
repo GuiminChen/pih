@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pih"
+version = "0.1.0"
+description = "HTTP client for the PIH native plugin inference runtime"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "PIH contributors" }]
+keywords = ["llm", "inference", "plugins", "cuda"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: C++",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/GuiminChen/pih"
+Repository = "https://github.com/GuiminChen/pih"
+Issues = "https://github.com/GuiminChen/pih/issues"
+Documentation = "https://github.com/GuiminChen/pih/tree/main/docs"
+
+[project.scripts]
+pih-client = "pih_client.__main__:main"
+pih-preflight-target-host = "pih_client.preflight:main"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+packages = ["pih_client"]
+include-package-data = false
+
+[tool.pytest.ini_options]
+pythonpath = ["python"]
+testpaths = ["tests/tools"]

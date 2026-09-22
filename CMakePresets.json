@@ -1,0 +1,70 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 26,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "phase1-native",
+      "displayName": "PIH Phase 1 native microkernel",
+      "description": "Fast microkernel, worker, Lock and minimal native-plugin smoke without CUDA or the monolith.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/phase1-native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PIH_ENABLE_CUDA": "OFF",
+        "PIH_ENABLE_NCCL": "OFF",
+        "PIH_BUILD_TESTS": "OFF",
+        "PIH_BUILD_PYTHON": "OFF",
+        "PIH_BUILD_WORKER": "ON",
+        "PIH_BUILD_PLUGINS": "ON",
+        "PIH_BUILD_MONOLITH": "OFF",
+        "PIH_DEPLOYMENT_PROFILE": "phase1-native",
+        "PIH_ENABLED_PLUGINS": "pih.testing.minimal"
+      }
+    },
+    {
+      "name": "deepseek-4090d-pp1",
+      "displayName": "PIH DeepSeek V4 Flash RTX 4090 D PP1",
+      "description": "Plugin-only Linux SM89 bundle without Python, NCCL, DSpark, Qwen, or the transitional monolith.",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "binaryDir": "${sourceDir}/out/build/deepseek-4090d-pp1",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/deepseek-4090d-pp1",
+        "PIH_ENABLE_CUDA": "ON",
+        "PIH_ENABLE_NCCL": "OFF",
+        "PIH_BUILD_TESTS": "OFF",
+        "PIH_BUILD_PYTHON": "OFF",
+        "PIH_BUILD_WORKER": "ON",
+        "PIH_BUILD_PLUGINS": "ON",
+        "PIH_BUILD_MONOLITH": "OFF",
+        "PIH_DEPLOYMENT_PROFILE": "deepseek-4090d-pp1",
+        "PIH_ENABLED_PLUGINS": "pih.platform.linux;pih.storage.verified-artifact;pih.backend.nvidia-cuda;pih.execution.default;pih.memory.host-spill;pih.model.deepseek-v4-flash;pih.surface.openai-http;pih.surface.health;pih.kernels.deepseek-v4.sm89"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "phase1-native",
+      "configurePreset": "phase1-native",
+      "targets": [
+        "pih_phase1_smoke"
+      ]
+    },
+    {
+      "name": "deepseek-4090d-pp1",
+      "configurePreset": "deepseek-4090d-pp1",
+      "targets": [
+        "pih_deepseek_4090d_pp1_bundle"
+      ]
+    }
+  ]
+}

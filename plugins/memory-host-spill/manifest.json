@@ -1,0 +1,37 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.memory.host-spill",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "native_plugin",
+  "plugin_abi": "pih.native-plugin.v1",
+  "entry_symbol": "pih_plugin_entry_v1",
+  "provides": [
+    {
+      "capability_id": "memory.host-spill.v1",
+      "contract_id": "pih.memory.host-spill.v1",
+      "scope": "activation",
+      "cardinality": "exactly_one",
+      "threading_model": "serialized"
+    }
+  ],
+  "requires": [
+    {
+      "capability_id": "device.cuda-memory.v1",
+      "contract_id": "pih.device.cuda-memory.v1",
+      "scope": "process",
+      "cardinality": "exactly_one"
+    },
+    {
+      "capability_id": "device.cuda-resources.v1",
+      "contract_id": "pih.device.cuda-resources.v1",
+      "scope": "process",
+      "cardinality": "exactly_one"
+    },
+    {
+      "capability_id": "device.cuda-async.v1",
+      "contract_id": "pih.device.cuda-async.v1",
+      "scope": "process",
+      "cardinality": "exactly_one"
+    }
+  ]
+}

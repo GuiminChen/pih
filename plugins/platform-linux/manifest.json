@@ -1,0 +1,18 @@
+{
+  "schema": "pih.plugin-manifest.v1",
+  "plugin_id": "pih.platform.linux",
+  "plugin_version": "1.0.0",
+  "artifact_kind": "native_plugin",
+  "plugin_abi": "pih.native-plugin.v1",
+  "entry_symbol": "pih_plugin_entry_v1",
+  "provides": [
+    {
+      "capability_id": "platform.linux.v1",
+      "contract_id": "pih.platform.linux.v1",
+      "scope": "process",
+      "cardinality": "exactly_one",
+      "threading_model": "serialized"
+    }
+  ],
+  "requires": []
+}

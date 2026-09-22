@@ -1,0 +1,4 @@
+# Exact development-CI toolchain.  Update only together with a recorded
+# compatibility run; production wheels use their sealed release closure.
+pytest==9.0.3
+scikit-build-core==0.11.6
