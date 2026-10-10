@@ -23,7 +23,7 @@ Status copy_branch(
   std::array<bool, 43> seen{};
   for (const auto& layer : source) {
     if (layer.layer < owned.first_layer || layer.layer > owned.last_layer ||
-        seen[layer.layer] || layer.sequences.size() != descriptor.sequence_count) {
+        seen[layer.layer] || (layer.sequences.size() != descriptor.sequence_count && !(layer.sequences.size() == 1 && layer.sequences.front().packed_tokens))) {
       return Status::InvalidArgument(
           "DeepSeek bound mHC layer work is invalid or duplicated");
     }

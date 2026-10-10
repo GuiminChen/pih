@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include "pih/core/buffer.h"
 #include "pih/model/deepseek_stage_mapping_plan.h"
@@ -27,16 +28,24 @@ class DeepSeekEndpointDeviceResources final {
   static Result<DeepSeekEndpointDeviceResources> Allocate(
       DeepSeekStagePlan stage, std::uint32_t maximum_tokens,
       Allocator& allocator, std::uint64_t context_identity,
-      std::int32_t device_ordinal);
+      std::int32_t device_ordinal, std::uint32_t maximum_sequences = 1);
 
   [[nodiscard]] DeepSeekEndpointDeviceView view() const noexcept {
     return view_;
+  }
+  [[nodiscard]] DeepSeekEndpointDeviceView view(std::uint32_t index) const {
+    auto result = index == 0 ? view_ : additional_sequences_.at(index - 1)->view();
+    result.embedding_output_hc_bf16 = view_.embedding_output_hc_bf16 == 0 ? 0
+        : view_.embedding_output_hc_bf16 + index * 4ULL * 4096 * sizeof(std::uint16_t);
+    return result;
   }
   [[nodiscard]] std::uint32_t maximum_tokens() const noexcept {
     return maximum_tokens_;
   }
   [[nodiscard]] std::uint64_t backing_bytes() const noexcept {
-    return backing_ == nullptr ? 0 : backing_->size_bytes();
+    std::uint64_t bytes = backing_ == nullptr ? 0 : backing_->size_bytes();
+    for (const auto& sequence : additional_sequences_) bytes += sequence->backing_bytes();
+    return bytes;
   }
 
  private:
@@ -49,6 +58,7 @@ class DeepSeekEndpointDeviceResources final {
   std::unique_ptr<Buffer> backing_;
   DeepSeekEndpointDeviceView view_;
   std::uint32_t maximum_tokens_ = 0;
+  std::vector<std::unique_ptr<DeepSeekEndpointDeviceResources>> additional_sequences_;
 };
 
 }  // namespace pih

@@ -66,6 +66,16 @@ Result<SamplingOperation> SamplingOperation::Start(const HeadOperation& head, Sa
   operation.completion_.emplace(std::move(*completion)); operation.failed_ = false;
   return operation;
 }
+Result<SamplingOperation> SamplingOperation::StartPacked(const HeadOperation& head, std::uint32_t member,
+    SamplingLaunch launch, const SamplingIdentity& identity, EngramDeviceRegion host_candidate,
+    const EngramCompletionResources& resources, Clock::time_point deadline) {
+  auto logits = head.PackedLogits(member); if (!logits.ok()) return logits.status();
+  HeadOperation view;
+  view.sequence_ = head.packed_sequences_[member]; view.step_end_ = head.packed_ends_[member];
+  view.logits_ = *logits; view.error_ = head.error_; view.stream_ = head.stream_;
+  view.state_ = HeadOperationState::kComplete;
+  return Start(view, launch, identity, host_candidate, resources, deadline);
+}
 Result<bool> SamplingOperation::Poll() {
   if (failed_ || !sequence_) return Status::FailedPrecondition("Sampling failed or moved from");
   if (complete_) return true;

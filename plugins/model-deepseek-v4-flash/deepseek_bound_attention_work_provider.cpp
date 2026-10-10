@@ -51,22 +51,30 @@ Status DeepSeekBoundDecodeAttentionWorkProvider::bind(
   const auto expected = owned_layers_.last_layer - owned_layers_.first_layer + 1;
   if (descriptor.engine_epoch == 0 || descriptor.plan_sequence == 0 ||
       descriptor.phase != DeepSeekPlanPhase::kDecode ||
-      descriptor.token_count == 0 || descriptor.sequence_count == 0 ||
-      layers.size() != expected) {
+      descriptor.token_count == 0 || descriptor.sequence_count == 0 || descriptor.sequence_count > 4096 ||
+      (layers.size() != expected && layers.size() != expected * descriptor.sequence_count)) {
     return Status::InvalidArgument(
         "DeepSeek bound decode attention plan is invalid");
   }
-  std::array<bool, 43> seen{};
+  std::array<std::uint32_t, 43> seen{};
   const auto pending = active_bank_ ^ 1U;
+  for (auto& batch : banks_[pending]) batch.clear();
   for (const auto& layer : layers) {
     if (layer.layer < owned_layers_.first_layer ||
-        layer.layer > owned_layers_.last_layer || seen[layer.layer] ||
-        !valid_decode(layer.work, descriptor.token_count)) {
+        layer.layer > owned_layers_.last_layer || seen[layer.layer] >= (layers.size() == expected ? 1U : descriptor.sequence_count) ||
+        !valid_decode(layer.work, layers.size() == expected ? descriptor.token_count : descriptor.token_count / descriptor.sequence_count)) {
       return Status::InvalidArgument(
           "DeepSeek bound decode attention layer work is invalid");
     }
-    banks_[pending][layer.layer] = layer.work;
-    seen[layer.layer] = true;
+    for (const auto& previous : banks_[pending][layer.layer]) {
+      if (previous.transaction == layer.work.transaction || previous.coordinator == layer.work.coordinator)
+        return Status::InvalidArgument("DeepSeek packed attention lane is duplicated");
+    }
+    banks_[pending][layer.layer].push_back(layer.work);
+    ++seen[layer.layer];
+  }
+  for (auto layer = owned_layers_.first_layer; layer <= owned_layers_.last_layer; ++layer) {
+    if (seen[layer] != (layers.size() == expected ? 1U : descriptor.sequence_count)) return Status::InvalidArgument("DeepSeek packed attention coverage is incomplete");
   }
   active_bank_ = pending;
   descriptor_ = descriptor;
@@ -81,17 +89,19 @@ DeepSeekBoundDecodeAttentionWorkProvider::resolve(
     return Status::FailedPrecondition(
         "DeepSeek decode attention work is not bound to this layer and plan");
   }
-  return &banks_[active_bank_][layer];
+  return &banks_[active_bank_][layer].front();
 }
 
 Status DeepSeekBoundDecodeAttentionWorkProvider::reset_completed() {
   if (!descriptor_.has_value()) return Status::Ok();
   for (auto layer = owned_layers_.first_layer;
        layer <= owned_layers_.last_layer; ++layer) {
-    auto* coordinator = banks_[active_bank_][layer].coordinator;
+    for (const auto& work : banks_[active_bank_][layer]) {
+    auto* coordinator = work.coordinator;
     if (coordinator == nullptr) return Status::Internal("DeepSeek completed decode coordinator is missing");
     auto status = coordinator->reset();
     if (!status.ok()) return status;
+    }
   }
   return Status::Ok();
 }
@@ -115,22 +125,30 @@ Status DeepSeekBoundChunkAttentionWorkProvider::bind(
                      descriptor.phase == DeepSeekPlanPhase::kVerify;
   const auto expected = owned_layers_.last_layer - owned_layers_.first_layer + 1;
   if (descriptor.engine_epoch == 0 || descriptor.plan_sequence == 0 || !phase ||
-      descriptor.token_count == 0 || descriptor.sequence_count == 0 ||
-      layers.size() != expected) {
+      descriptor.token_count == 0 || descriptor.sequence_count == 0 || descriptor.sequence_count > 4096 ||
+      (layers.size() != expected && layers.size() != expected * descriptor.sequence_count)) {
     return Status::InvalidArgument(
         "DeepSeek bound chunk attention plan is invalid");
   }
-  std::array<bool, 43> seen{};
+  std::array<std::uint32_t, 43> seen{};
   const auto pending = active_bank_ ^ 1U;
+  for (auto& batch : banks_[pending]) batch.clear();
   for (const auto& layer : layers) {
     if (layer.layer < owned_layers_.first_layer ||
-        layer.layer > owned_layers_.last_layer || seen[layer.layer] ||
-        !valid_chunk(layer.work, descriptor.token_count)) {
+        layer.layer > owned_layers_.last_layer || seen[layer.layer] >= (layers.size() == expected ? 1U : descriptor.sequence_count) ||
+        !valid_chunk(layer.work, layers.size() == expected ? descriptor.token_count : descriptor.token_count / descriptor.sequence_count)) {
       return Status::InvalidArgument(
           "DeepSeek bound chunk attention layer work is invalid");
     }
-    banks_[pending][layer.layer] = layer.work;
-    seen[layer.layer] = true;
+    for (const auto& previous : banks_[pending][layer.layer]) {
+      if (previous.transaction == layer.work.transaction || previous.attention_coordinator == layer.work.attention_coordinator)
+        return Status::InvalidArgument("DeepSeek packed attention lane is duplicated");
+    }
+    banks_[pending][layer.layer].push_back(layer.work);
+    ++seen[layer.layer];
+  }
+  for (auto layer = owned_layers_.first_layer; layer <= owned_layers_.last_layer; ++layer) {
+    if (seen[layer] != (layers.size() == expected ? 1U : descriptor.sequence_count)) return Status::InvalidArgument("DeepSeek packed attention coverage is incomplete");
   }
   active_bank_ = pending;
   descriptor_ = descriptor;
@@ -145,19 +163,35 @@ DeepSeekBoundChunkAttentionWorkProvider::resolve(
     return Status::FailedPrecondition(
         "DeepSeek chunk attention work is not bound to this layer and plan");
   }
-  return &banks_[active_bank_][layer];
+  return &banks_[active_bank_][layer].front();
 }
 
 Status DeepSeekBoundChunkAttentionWorkProvider::reset_completed() {
   if (!descriptor_.has_value()) return Status::Ok();
   for (auto layer = owned_layers_.first_layer;
        layer <= owned_layers_.last_layer; ++layer) {
-    auto* coordinator = banks_[active_bank_][layer].attention_coordinator;
+    for (const auto& work : banks_[active_bank_][layer]) {
+    auto* coordinator = work.attention_coordinator;
     if (coordinator == nullptr) return Status::Internal("DeepSeek completed chunk coordinator is missing");
     auto status = coordinator->reset();
     if (!status.ok()) return status;
+    }
   }
   return Status::Ok();
 }
 
+Result<std::span<const DeepSeekDecodeAttentionWork>>
+DeepSeekBoundDecodeAttentionWorkProvider::resolve_batch(
+    std::uint32_t layer, const DeepSeekPipelinePlanDescriptor& plan) {
+  auto first = resolve(layer, plan);
+  if (!first.ok()) return first.status();
+  return std::span<const DeepSeekDecodeAttentionWork>(banks_[active_bank_][layer]);
+}
+Result<std::span<const DeepSeekChunkAttentionWork>>
+DeepSeekBoundChunkAttentionWorkProvider::resolve_batch(
+    std::uint32_t layer, const DeepSeekPipelinePlanDescriptor& plan) {
+  auto first = resolve(layer, plan);
+  if (!first.ok()) return first.status();
+  return std::span<const DeepSeekChunkAttentionWork>(banks_[active_bank_][layer]);
+}
 }  // namespace pih

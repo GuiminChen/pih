@@ -1,12 +1,12 @@
 #include "pih/plugin_sdk/abi.h"
-#include "pih/contracts/text_inference_v2.h"
+#include "pih/contracts/text_inference_v3.h"
 #include "pih/contracts/qwen_kernels_v1.h"
 #include "pih/contracts/artifact_snapshot_v1.h"
 #include "pih/core/bounded_json.h"
 #include "pih/model/nvidia_qwen3_bf16_engine.h"
 #include "pih/model/nvidia_qwen3_int4_engine.h"
 #include "tokenizer.h"
-#include "generation.h"
+#include "batch_generation.h"
 #include "execution_binding.h"
 #include "controller_client.h"
 #include "memory_binding.h"
@@ -22,6 +22,7 @@
 #include <memory>
 #include <limits>
 #include <mutex>
+#include <atomic>
 #include <stdexcept>
 
 namespace {
@@ -32,10 +33,10 @@ struct State {
   ~State();
   const pih_host_api_v1* host{};
   uint32_t phase{};
-  bool failed{};
+  std::atomic<bool> failed{};
   uint32_t maximum_context{};
   uint32_t generation_timeout_ms{};
-  uint64_t next_response_id{1};
+  std::atomic<uint64_t> next_response_id{1};
   const pih_qwen_kernels_api_v1* kernels{};
   const pih_execution_default_api_v1* execution{};
   const pih_artifact_snapshot_api_v1* artifact{};
@@ -46,6 +47,10 @@ struct State {
   std::mutex mutex;
   std::unique_ptr<pih::NvidiaQwen3Bf16Engine> bf16;
   std::unique_ptr<pih::NvidiaQwen3Int4Engine> int4;
+  std::unique_ptr<pih::qwen_plugin::BatchGeneration<pih::NvidiaQwen3Bf16Engine>> bf16_batch;
+  std::unique_ptr<pih::qwen_plugin::BatchGeneration<pih::NvidiaQwen3Int4Engine>> int4_batch;
+  std::atomic<uint32_t> active_calls{0};
+  std::atomic<uint32_t> concurrent_capacity{0};
   std::unique_ptr<pih::qwen_plugin::Tokenizer> tokenizer;
   std::unique_ptr<ArtifactSnapshot> artifact_snapshot;
 } state;
@@ -129,7 +134,7 @@ pih_status_v1 Load(void* context, const char* configuration, uint64_t size) noex
     if (state.phase != 4 || state.tokenizer || state.bf16 || state.int4 || state.failed)
       return Status(PIH_STATUS_FAILED_PRECONDITION_V1);
     const auto config = Parse(configuration, size, 16384);
-    if (config.object().size() != 6) throw std::invalid_argument("unexpected model configuration fields");
+    if (config.object().size() != 9) throw std::invalid_argument("unexpected model configuration fields");
     const auto model = std::filesystem::path(Field(config, "model_directory").string());
     const char* kernel_root = nullptr;
     if (!state.kernels) return Status(PIH_STATUS_FAILED_PRECONDITION_V1, "kernel_pack_not_bound");
@@ -148,6 +153,10 @@ pih_status_v1 Load(void* context, const char* configuration, uint64_t size) noex
       throw std::invalid_argument("Qwen config digest must be a nonzero SHA-256");
     const auto maximum = Field(config, "maximum_context_tokens").integer();
     const auto timeout = Field(config, "generation_timeout_ms").integer();
+    const auto sequences = Field(config, "maximum_batch_sequences").integer();
+    const auto batch_tokens = Field(config, "maximum_batch_tokens").integer();
+    const auto pending = Field(config, "maximum_pending_requests").integer();
+    if (sequences < 1 || sequences > 32 || batch_tokens < sequences || batch_tokens > 4096 || pending < 1 || pending > 4096) throw std::invalid_argument("invalid batch capacity");
     if (!model.is_absolute() || !cubin.is_absolute() || maximum < 2 || maximum > 40960 ||
         timeout < 1 || timeout > 86400000 ||
         (precision != "bf16" && precision != "int4")) throw std::invalid_argument("invalid Qwen configuration");
@@ -190,11 +199,11 @@ pih_status_v1 Load(void* context, const char* configuration, uint64_t size) noex
                                       expected_artifact_digest->hex(), 2ULL * 1024 * 1024 * 1024);
     if (!pih_status_is_ok_v1(&opened)) return opened;
     if (precision == "bf16") {
-      auto loaded = pih::NvidiaQwen3Bf16Engine::LoadPinnedSnapshot(*state.memory, *state.resources, *state.async, cubin, 0, snapshot.bytes(), config_json, *expected_artifact_digest, state.kernels->target_sm);
+      auto loaded = pih::NvidiaQwen3Bf16Engine::LoadPinnedSnapshot(*state.memory, *state.resources, *state.async, cubin, 0, snapshot.bytes(), config_json, *expected_artifact_digest, state.kernels->target_sm, static_cast<uint32_t>(sequences), static_cast<uint32_t>(batch_tokens));
       if (!loaded.ok()) return Status(PIH_STATUS_FAILED_PRECONDITION_V1, loaded.status().message());
       state.bf16 = std::move(*loaded);
     } else {
-      auto loaded = pih::NvidiaQwen3Int4Engine::LoadPinnedSnapshot(*state.memory, *state.resources, *state.async, cubin, 0, snapshot.bytes(), config_json, *expected_artifact_digest, state.kernels->target_sm);
+      auto loaded = pih::NvidiaQwen3Int4Engine::LoadPinnedSnapshot(*state.memory, *state.resources, *state.async, cubin, 0, snapshot.bytes(), config_json, *expected_artifact_digest, state.kernels->target_sm, static_cast<uint32_t>(sequences), static_cast<uint32_t>(batch_tokens));
       if (!loaded.ok()) return Status(PIH_STATUS_FAILED_PRECONDITION_V1, loaded.status().message());
       state.int4 = std::move(*loaded);
     }
@@ -203,22 +212,29 @@ pih_status_v1 Load(void* context, const char* configuration, uint64_t size) noex
     state.artifact_snapshot.reset();
     state.tokenizer = std::move(tokenizer); state.maximum_context = static_cast<uint32_t>(maximum);
     state.generation_timeout_ms = static_cast<uint32_t>(timeout);
+    state.concurrent_capacity = static_cast<uint32_t>(sequences + pending);
+    if (state.bf16) state.bf16_batch = std::make_unique<pih::qwen_plugin::BatchGeneration<pih::NvidiaQwen3Bf16Engine>>(*state.bf16, sequences, pending);
+    else state.int4_batch = std::make_unique<pih::qwen_plugin::BatchGeneration<pih::NvidiaQwen3Int4Engine>>(*state.int4, sequences, pending);
     state.failed = false;
     return Status(PIH_STATUS_OK_V1);
   });
 }
 pih_status_v1 Complete(void* context, uint32_t chat, const char* request, uint64_t size,
     char* response, uint64_t capacity, uint64_t* written,
-    const pih_text_output_sink_v2* sink) noexcept {
+    const pih_text_output_sink_v3* sink) noexcept {
   if (written) *written = 0;
   return Guard([&] {
     if (context != &state || chat > 1 || !response || !written || capacity < 1024 ||
-        !sink || sink->struct_size != sizeof(*sink) || sink->contract_version != PIH_TEXT_INFERENCE_ABI_V2 ||
+        !sink || sink->struct_size != sizeof(*sink) || sink->contract_version != PIH_TEXT_INFERENCE_ABI_V3 ||
         !sink->context || !sink->start || !sink->write || !sink->cancelled)
       return Status(PIH_STATUS_INVALID_ARGUMENT_V1);
-    std::unique_lock lock(state.mutex, std::try_to_lock);
-    if (!lock.owns_lock()) return Status(PIH_STATUS_UNAVAILABLE_V1, "engine_busy");
+    std::unique_lock lock(state.mutex);
     if (!state.tokenizer || state.failed || state.phase != 4) return Status(PIH_STATUS_FAILED_PRECONDITION_V1, "engine_not_ready");
+    if (state.active_calls.load() >= state.concurrent_capacity.load())
+      return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, "request_admission_capacity_exhausted");
+    struct CallGuard { std::atomic<uint32_t>& count; ~CallGuard() { --count; } } call{state.active_calls};
+    ++state.active_calls;
+    lock.unlock();
     const auto deadline = std::chrono::steady_clock::now() +
         std::chrono::milliseconds(state.generation_timeout_ms);
     auto body = Parse(request, size, 1024 * 1024);
@@ -246,11 +262,15 @@ pih_status_v1 Complete(void* context, uint32_t chat, const char* request, uint64
     } else append(Field(body, "prompt").string());
     if (tokens.empty() || tokens.size() + maximum > state.maximum_context)
       throw std::invalid_argument("prompt and output exceed context limit");
-    if (state.next_response_id == std::numeric_limits<uint64_t>::max())
-      return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, "response_identity_exhausted");
+    auto response_id = state.next_response_id.load();
+    for (;;) {
+      if (response_id == std::numeric_limits<uint64_t>::max())
+        return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, "response_identity_exhausted");
+      if (state.next_response_id.compare_exchange_weak(response_id, response_id + 1)) break;
+    }
     const auto created = std::chrono::duration_cast<std::chrono::seconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
-    const auto identity = "{\"id\":\"pih-qwen-" + std::to_string(state.next_response_id++) +
+    const auto identity = "{\"id\":\"pih-qwen-" + std::to_string(response_id) +
         "\",\"created\":" + std::to_string(created) + ",\"model\":\"Qwen/Qwen3-0.6B\",\"object\":";
     const auto chunk = [&](std::string_view text, const char* finish, std::string_view usage = "") {
       const auto json = identity + Quote(chat ? "chat.completion.chunk" : "text_completion") +
@@ -294,14 +314,17 @@ pih_status_v1 Complete(void* context, uint32_t chat, const char* request, uint64
     auto generated = [&] {
       try {
         return state.bf16
-            ? pih::qwen_plugin::Generate(*state.bf16, tokens, static_cast<uint32_t>(maximum), sampling, deadline, on_token, cancelled)
-            : pih::qwen_plugin::Generate(*state.int4, tokens, static_cast<uint32_t>(maximum), sampling, deadline, on_token, cancelled);
+            ? state.bf16_batch->Generate( tokens, static_cast<uint32_t>(maximum), sampling, deadline, on_token, cancelled)
+            : state.int4_batch->Generate( tokens, static_cast<uint32_t>(maximum), sampling, deadline, on_token, cancelled);
       } catch (...) {
         state.failed = true;
         throw std::runtime_error("native_generation_exception");
       }
     }();
-    if (!generated.ok()) { state.failed = true; return Status(PIH_STATUS_INTERNAL_V1, "inference_failed_restart_required"); }
+    if (!generated.ok()) {
+      if (generated.status().code() == pih::StatusCode::kResourceExhausted) return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, generated.status().message());
+      state.failed = true; return Status(PIH_STATUS_INTERNAL_V1, "inference_failed_restart_required");
+    }
     if (output_exceeded)
       return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, "completion_exceeds_text_byte_budget");
     if (generated->callback_failed)
@@ -337,8 +360,13 @@ pih_status_v1 Close(void* context) noexcept {
     if (context != &state) return Status(PIH_STATUS_INVALID_ARGUMENT_V1);
     std::unique_lock lock(state.mutex, std::try_to_lock);
     if (!lock.owns_lock()) return Status(PIH_STATUS_UNAVAILABLE_V1, "engine_operation_active");
+    if (state.active_calls.load()) return Status(PIH_STATUS_UNAVAILABLE_V1, "engine_operation_active");
+    state.concurrent_capacity = 0;
+    state.bf16_batch.reset(); state.int4_batch.reset();
     const auto retire = [&](auto& engine) {
       if (!engine) return Status(PIH_STATUS_OK_V1);
+      const auto bound = engine->bind_packed_thread();
+      if (!bound.ok()) { state.failed = true; return Status(PIH_STATUS_INTERNAL_V1, bound.message()); }
       const auto result = engine->close();
       if (!result.ok()) {
         // Both native engines finish their close gate with this result. It is
@@ -364,7 +392,10 @@ pih_status_v1 Close(void* context) noexcept {
     state.tokenizer.reset(); return Status(PIH_STATUS_OK_V1);
   });
 }
-pih_text_inference_api_v2 api{sizeof(api), PIH_TEXT_INFERENCE_ABI_V2, &state, "Qwen/Qwen3-0.6B", Load, Complete, Close};
+uint32_t MaximumConcurrentRequests(void* context) noexcept {
+  return context == &state && !state.failed.load() ? state.concurrent_capacity.load() : 0;
+}
+pih_text_inference_api_v3 api{sizeof(api), PIH_TEXT_INFERENCE_ABI_V3, &state, "Qwen/Qwen3-0.6B", Load, Complete, Close, MaximumConcurrentRequests};
 pih_status_v1 Advance(void* context, uint32_t expected) noexcept {
   if (context != &state || state.phase != expected) return Status(PIH_STATUS_FAILED_PRECONDITION_V1, "lifecycle_order_invalid");
   ++state.phase; return Status(PIH_STATUS_OK_V1);
@@ -372,7 +403,7 @@ pih_status_v1 Advance(void* context, uint32_t expected) noexcept {
 pih_status_v1 Register(void* context) noexcept {
   if (context != &state || state.phase != 0 || !state.host) return Status(PIH_STATUS_FAILED_PRECONDITION_V1);
   pih_capability_v1 capability{sizeof(capability), PIH_CAPABILITY_ABI_VERSION_V1,
-      "inference.text.v2", "pih.inference.text.v2", &api, PIH_CAPABILITY_THREADING_SERIALIZED_V1,
+      "inference.text.v3", "pih.inference.text.v3", &api, PIH_CAPABILITY_THREADING_CONCURRENT_V1,
       PIH_CAPABILITY_SCOPE_ACTIVATION_V1, PIH_CAPABILITY_CARDINALITY_EXACTLY_ONE_V1};
   const auto result = state.host->register_capability(state.host->context, &capability);
   if (!pih_status_is_valid_v1(&result)) return Status(PIH_STATUS_INTERNAL_V1);
@@ -496,4 +527,3 @@ extern "C" PIH_PLUGIN_EXPORT pih_status_v1 pih_plugin_entry_v1(
     Register, Configure, Start, Ready, Drain, Stop, Dispose};
   return Status(PIH_STATUS_OK_V1);
 }
-

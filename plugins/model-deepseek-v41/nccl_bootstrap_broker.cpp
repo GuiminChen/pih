@@ -69,6 +69,13 @@ Status NcclBootstrapBroker::BeginRetirement(Clock::time_point deadline) {
   Clear(); retirement_ = deadline; state_ = NcclBrokerState::kRetiring;
   return Status::Ok();
 }
+Status NcclBootstrapBroker::ResumeRetirement(Clock::time_point deadline) {
+  if (state_ != NcclBrokerState::kRetiring || deadline <= Clock::now() ||
+      deadline - Clock::now() > std::chrono::minutes(5))
+    return Status::FailedPrecondition("NCCL broker retained retirement retry invalid");
+  retirement_ = deadline;
+  return Status::Ok();
+}
 Result<bool> NcclBootstrapBroker::PollRetirement() {
   if (state_ == NcclBrokerState::kRetired) return true;
   if (state_ != NcclBrokerState::kRetiring) return Status::FailedPrecondition("NCCL broker retirement not started");

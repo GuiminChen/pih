@@ -21,11 +21,11 @@ Result<DeepSeekEndpointDeviceResources>
 DeepSeekEndpointDeviceResources::Allocate(
     DeepSeekStagePlan stage, std::uint32_t maximum_tokens,
     Allocator& allocator, std::uint64_t context_identity,
-    std::int32_t device_ordinal) {
+    std::int32_t device_ordinal, std::uint32_t maximum_sequences) {
   if (stage.layers.first_layer > stage.layers.last_layer ||
       stage.layers.last_layer >= 43 || maximum_tokens == 0 ||
       maximum_tokens > 4096 || context_identity == 0 ||
-      device_ordinal < 0) {
+      device_ordinal < 0 || maximum_sequences == 0 || maximum_sequences > maximum_tokens) {
     return Status::InvalidArgument(
         "DeepSeek endpoint device identity is invalid");
   }
@@ -111,8 +111,15 @@ DeepSeekEndpointDeviceResources::Allocate(
       stage.owns_lm_head ? base + sampling_workspace_ids_offset : 0,
       stage.owns_lm_head ? base + top_logprobs_ids_offset : 0,
       stage.owns_lm_head ? base + top_logprobs_offset : 0};
-  return DeepSeekEndpointDeviceResources(
+  DeepSeekEndpointDeviceResources result(
       std::make_unique<Buffer>(std::move(*backing)), view, maximum_tokens);
+  for (std::uint32_t sequence = 1; sequence < maximum_sequences; ++sequence) {
+    auto lane = Allocate(stage, 1, allocator, context_identity, device_ordinal, 1);
+    if (!lane.ok()) return lane.status();
+    result.additional_sequences_.push_back(
+        std::make_unique<DeepSeekEndpointDeviceResources>(std::move(*lane)));
+  }
+  return result;
 }
 
 }  // namespace pih

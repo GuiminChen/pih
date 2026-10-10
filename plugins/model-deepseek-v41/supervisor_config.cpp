@@ -74,9 +74,20 @@ Result<SupervisorConfig> SupervisorConfig::Parse(std::string_view json, const Sh
     auto parsed = JsonValue::Parse(json, {kMaximumBytes, 8, 4096, 1U << 20});
     if (!parsed.ok()) return parsed.status();
     const auto& root = *parsed;
-    Object(root, {"schema", "worker", "helper", "library_directories", "cgroup", "request", "model", "ranks", "timeouts"});
-    if (Text(Field(root, "schema"), 64) != "pih.deepseek-v41.supervisor.v1") Invalid();
+    const auto schema = Text(Field(root, "schema"), 64);
+    if (schema == "pih.deepseek-v41.supervisor.v1")
+      Object(root, {"schema", "worker", "helper", "library_directories", "cgroup", "request", "model", "ranks", "timeouts"});
+    else if (schema == "pih.deepseek-v41.supervisor.v2")
+      Object(root, {"schema", "worker", "helper", "library_directories", "cgroup", "request", "model", "ranks", "timeouts", "batching"});
+    else Invalid();
     SupervisorConfig out;
+    if (schema == "pih.deepseek-v41.supervisor.v2") {
+      const auto& batching = Field(root, "batching");
+      Object(batching, {"maximum_batch_sequences", "maximum_batch_tokens", "maximum_pending_requests"});
+      out.maximum_batch_sequences = Integer(Field(batching, "maximum_batch_sequences"), 1, 32);
+      out.maximum_batch_tokens = Integer(Field(batching, "maximum_batch_tokens"), out.maximum_batch_sequences, 4096);
+      out.maximum_pending_requests = Integer(Field(batching, "maximum_pending_requests"), 1, 4096);
+    }
     out.worker = Executable(Field(root, "worker")); out.helper = Executable(Field(root, "helper"));
     const auto& libraries = Field(root, "library_directories");
     if (!libraries.is_array() || libraries.array().size() > 16) Invalid();
@@ -123,6 +134,12 @@ Result<SupervisorConfig> SupervisorConfig::Parse(std::string_view json, const Sh
     if (out.sequence_ms <= out.startup_ms || out.grace_ms >= out.retirement_ms) Invalid();
     const auto& model = Field(root, "model"); Object(model, {"config_sha256", "map_sha256", "plugin_lock", "plugin_lock_sha256", "sm_major", "sm_minor", "staging_bytes"});
     WorkerBootstrap common;
+    if (schema == "pih.deepseek-v41.supervisor.v2") {
+      common.packed_requests = true;
+      common.maximum_batch_sequences = out.maximum_batch_sequences;
+      common.maximum_batch_tokens = out.maximum_batch_tokens;
+      common.maximum_pending_requests = out.maximum_pending_requests;
+    }
     common.config_sha256 = Digest(Field(model, "config_sha256")); common.map_sha256 = Digest(Field(model, "map_sha256"));
     common.plugin_lock = Path(Field(model, "plugin_lock")); common.plugin_lock_sha256 = Digest(Field(model, "plugin_lock_sha256"));
     common.sm_major = Integer(Field(model, "sm_major"), 1, 99); common.sm_minor = Integer(Field(model, "sm_minor"), 0, 9);

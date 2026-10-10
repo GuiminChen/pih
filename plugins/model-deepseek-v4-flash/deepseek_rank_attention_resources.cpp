@@ -24,7 +24,10 @@ DeepSeekRankAttentionResources::Allocate(
     DeepSeekAttentionRuntimeOperations operations,
     RegisteredPinnedAllocator& pinned_allocator,
     Allocator& device_allocator, std::uintptr_t completion_event,
-    std::uint64_t context_identity, std::int32_t device_ordinal) {
+    std::uint64_t context_identity, std::int32_t device_ordinal,
+    std::uint32_t maximum_sequences) {
+  if (maximum_sequences == 0 || maximum_sequences > 4096)
+    return Status::InvalidArgument("DeepSeek attention lane capacity invalid");
   auto host = DeepSeekAttentionHostStagingResources::Allocate(
       pinned_allocator, maximum_queries, maximum_ratio4_logical_pages);
   if (!host.ok()) return host.status();
@@ -57,7 +60,7 @@ DeepSeekRankAttentionResources::Allocate(
   auto factory = DeepSeekAttentionWorkFactory::Create(
       owned_layers, runtime->borrow_layer_resources());
   if (!factory.ok()) return factory.status();
-  return DeepSeekRankAttentionResources(
+  DeepSeekRankAttentionResources result(
       std::make_unique<DeepSeekAttentionHostStagingResources>(
           std::move(*host)),
       std::make_unique<DeepSeekAttentionDeviceScratchResources>(
@@ -67,6 +70,24 @@ DeepSeekRankAttentionResources::Allocate(
       std::make_unique<DeepSeekAttentionRuntimeResources>(
           std::move(*runtime)),
       std::make_unique<DeepSeekAttentionWorkFactory>(std::move(*factory)));
+  auto all_layers = result.runtime_->borrow_layer_resources();
+  for (std::uint32_t sequence = 1; sequence < maximum_sequences; ++sequence) {
+    auto lane = Allocate(owned_layers, maximum_queries,
+        maximum_ratio4_logical_pages, fixed_layout, page_arena, operations,
+        pinned_allocator, device_allocator, completion_event, context_identity,
+        device_ordinal, 1);
+    if (!lane.ok()) return lane.status();
+    auto owned_lane = std::make_unique<DeepSeekRankAttentionResources>(std::move(*lane));
+    for (auto layer : owned_lane->runtime_->borrow_layer_resources()) {
+      layer.sequence_index = sequence;
+      all_layers.push_back(layer);
+    }
+    result.additional_lanes_.push_back(std::move(owned_lane));
+  }
+  auto packed = DeepSeekAttentionWorkFactory::Create(owned_layers, std::move(all_layers));
+  if (!packed.ok()) return packed.status();
+  result.work_factory_ = std::make_unique<DeepSeekAttentionWorkFactory>(std::move(*packed));
+  return result;
 }
 
 }  // namespace pih

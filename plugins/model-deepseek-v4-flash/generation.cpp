@@ -179,3 +179,35 @@ Result<DeepSeekAcceptedTokenSnapshot> Generate(
   return accepted;
 }
 }  // namespace pih::deepseek_plugin
+
+
+namespace pih::deepseek_plugin {
+namespace {
+class NativeBatchEngine final : public BatchEngine {
+ public:
+  explicit NativeBatchEngine(DeepSeekEngine& value) : engine(value) {}
+  DeepSeekEngine& engine;
+  Status bind_execution_thread() override { return engine.bind_execution_thread(); }
+  Status submit_request(uint64_t id,uint64_t generation) override { return engine.submit_request(id,generation); }
+  Status configure_ledger(uint64_t id,uint64_t generation,uint64_t prompt,uint32_t maximum,uint32_t minimum) override { return engine.configure_ledger(id,generation,prompt,maximum,minimum); }
+  Status configure_sampling(uint64_t id,uint64_t generation,DeepSeekRequestSamplingConfig sampling) override { return engine.configure_sampling(id,generation,sampling); }
+  Status cancel_request(uint64_t id,uint64_t generation) override { return engine.cancel_request(id,generation); }
+  Status finish_request(uint64_t id,uint64_t generation) override { return engine.finish_request(id,generation); }
+  Status retire_request(uint64_t id,uint64_t generation) override { return engine.retire_request(id,generation); }
+  Status prepare_production_pipeline(DeepSeekPipelinePlanDescriptor descriptor,std::vector<DeepSeekRequestIdentity> identities,
+      std::vector<DeepSeekProductionRankPlanSeed> seeds,uint32_t sequences,uint32_t tokens,uint32_t vocabulary,bool sample) override {
+    return engine.prepare_production_pipeline(descriptor,std::move(identities),std::move(seeds),sequences,tokens,vocabulary,sample);
+  }
+  Status commit_pipeline() override { return engine.commit_pipeline(); }
+  bool execution_live() const override { return engine.execution_live(); }
+  Status advance_bound_pipeline() override { return engine.advance_bound_pipeline(); }
+  Status acknowledge_output_plan(uint64_t plan) override { return engine.acknowledge_output_plan(plan); }
+  Result<DeepSeekAcceptedTokenSnapshot> accepted_token_snapshot(uint64_t id,uint64_t generation) override { return engine.accepted_token_snapshot(id,generation); }
+  void fail_all() override { engine.fail_all(); }
+  uint64_t epoch() const override { return engine.epoch(); }
+  uint32_t world_size() const override { return engine.world_size(); }
+};
+}
+BatchGenerator::BatchGenerator(DeepSeekEngine& engine,uint32_t sequences,uint32_t tokens,uint32_t pending)
+    : BatchGenerator(std::make_unique<NativeBatchEngine>(engine),sequences,tokens,pending) {}
+}

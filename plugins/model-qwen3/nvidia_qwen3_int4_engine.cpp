@@ -116,12 +116,14 @@ Result<std::unique_ptr<NvidiaQwen3Int4Engine>> NvidiaQwen3Int4Engine::LoadPinned
     std::span<const std::byte> artifact_bytes,
     std::string_view config_json,
     Sha256Digest expected_artifact_digest,
-    std::uint32_t provider_prepared_sm) {
+    std::uint32_t provider_prepared_sm, std::uint32_t maximum_batch_sequences,
+      std::uint32_t maximum_batch_tokens) {
  if(artifact_bytes.empty()||config_json.empty()||expected_artifact_digest==Sha256Digest{}||
-    (provider_prepared_sm!=89&&provider_prepared_sm!=90))
+    (provider_prepared_sm!=89&&provider_prepared_sm!=90)||
+    maximum_batch_sequences<1||maximum_batch_sequences>32||maximum_batch_tokens<maximum_batch_sequences||maximum_batch_tokens>4096)
   return Status::InvalidArgument("Qwen INT4 authenticated snapshot invalid");
  return LoadImpl(memory,resources,async,cubin_root,
-                 ordinal,expected_artifact_digest,artifact_bytes,config_json,provider_prepared_sm);
+                 ordinal,expected_artifact_digest,artifact_bytes,config_json,provider_prepared_sm,maximum_batch_sequences,maximum_batch_tokens);
 }
 
 Result<std::unique_ptr<NvidiaQwen3Int4Engine>> NvidiaQwen3Int4Engine::LoadImpl(
@@ -132,7 +134,8 @@ Result<std::unique_ptr<NvidiaQwen3Int4Engine>> NvidiaQwen3Int4Engine::LoadImpl(
       Sha256Digest expected_artifact_digest,
       std::span<const std::byte> artifact_bytes,
       std::string_view config_json,
-      std::uint32_t provider_prepared_sm) {
+      std::uint32_t provider_prepared_sm, std::uint32_t maximum_batch_sequences,
+      std::uint32_t maximum_batch_tokens) {
  if(provider_prepared_sm!=89&&provider_prepared_sm!=90)
   return Status::InvalidArgument("Qwen INT4 requires a provider-admitted SM89 or SM90 device");
  auto load=QwenInt4EngineLoadPlan::CreateFromJson(config_json,cubin_root,ordinal);
@@ -260,11 +263,10 @@ Result<std::unique_ptr<NvidiaQwen3Int4Engine>> NvidiaQwen3Int4Engine::LoadImpl(
  auto resource_hash=packed_resource_vector_hash(*capacity);
  if(!resource_hash.ok())return resource_hash.status();
  auto controller=qwen_plugin::ControllerClient::CreateBound(
-  {1,kMaximumBatchSequences,{{64,128},
-    {kMaximumBatchSequences,kMaximumSequenceTokens,kMaximumSequenceTokens}},
-   {kMaximumBatchSequences,kMaximumBatchSequences,kMaximumStepTokens,
-    kMaximumBatchSequences,8,5'000'000},
-   {kMaximumBatchSequences,kMaximumStepTokens},kMaximumStepTokens,true,
+  {1,maximum_batch_sequences,{{64,128},
+    {maximum_batch_sequences,kMaximumSequenceTokens,kMaximumSequenceTokens}},
+   {maximum_batch_sequences,maximum_batch_sequences,maximum_batch_tokens,maximum_batch_sequences,8,5'000'000},
+   {kMaximumBatchSequences,kMaximumStepTokens},maximum_batch_tokens,true,
    "qwen3-int4-fused-packed-v1",*resource_hash,
    static_cast<std::uint32_t>(state->bootstrap->model().config().eos_token_id)});
  if(!controller.ok())return controller.status();
@@ -314,6 +316,11 @@ Result<std::uint64_t> NvidiaQwen3Int4Engine::submit_packed(
   generation,tokens,maximum_new_tokens,sampling);
  if(!submitted.ok())return submitted;
  ++state_->next_packed_request_generation;return generation;
+}
+Status NvidiaQwen3Int4Engine::bind_packed_thread() {
+  if (!state_ || !state_->runtime || !state_->runtime_driver)
+    return Status::FailedPrecondition("Qwen packed runtime context missing");
+  return state_->runtime_driver->bind_runtime(state_->rank, state_->runtime->identity().context);
 }
 Status NvidiaQwen3Int4Engine::cancel_packed(std::uint64_t generation){
  if(!state_||state_->poisoned.load())

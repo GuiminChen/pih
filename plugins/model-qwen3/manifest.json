@@ -5,7 +5,7 @@
   "artifact_kind": "native_plugin",
   "plugin_abi": "pih.native-plugin.v1",
   "entry_symbol": "pih_plugin_entry_v1",
-  "provides": [{"capability_id":"inference.text.v2","contract_id":"pih.inference.text.v2","scope":"activation","cardinality":"exactly_one","threading_model":"serialized"}],
+  "provides": [{"capability_id":"inference.text.v3","contract_id":"pih.inference.text.v3","scope":"activation","cardinality":"exactly_one","threading_model":"concurrent"}],
   "requires": [
     {"capability_id":"artifact.authenticated-snapshot.v1","contract_id":"pih.artifact.authenticated-snapshot.v1","scope":"activation","cardinality":"exactly_one"},
     {"capability_id":"device.cuda-async.v1","contract_id":"pih.device.cuda-async.v1","scope":"process","cardinality":"exactly_one"},

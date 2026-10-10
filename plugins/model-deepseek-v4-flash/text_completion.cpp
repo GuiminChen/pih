@@ -39,7 +39,7 @@ Result<std::string> CompleteText(DeepSeekEngine& engine,
     const plugin_text::DeepSeekSemanticArtifacts& semantic,
     uint32_t context_capacity, uint32_t prefill_chunk, uint32_t generation_timeout_ms,
     uint64_t& next_request, uint64_t& next_generation, uint64_t& next_plan,
-    bool chat, std::string_view request, const pih_text_output_sink_v2& sink) {
+    bool chat, std::string_view request, const pih_text_output_sink_v3& sink, BatchGenerator* batch) {
   if (generation_timeout_ms < 1 || generation_timeout_ms > 86400000)
     return Status::InvalidArgument("DeepSeek generation timeout must be 1..86400000 ms");
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(generation_timeout_ms);
@@ -143,7 +143,8 @@ Result<std::string> CompleteText(DeepSeekEngine& engine,
     return emit(semantic.tokenizer().DecodeIncremental({&token, 1}, pending_utf8));
   };
   try {
-  auto generated = Generate(engine, tokens, static_cast<uint32_t>(maximum), 0, sampling,
+  auto generated = batch ? batch->Generate(tokens, static_cast<uint32_t>(maximum), 0, sampling,
+      context_capacity, id, generation, deadline, callbacks) : Generate(engine, tokens, static_cast<uint32_t>(maximum), 0, sampling,
       prefill_chunk, context_capacity, id, generation, next_plan,
       deadline, callbacks);
   if (!generated.ok()) return generated.status();

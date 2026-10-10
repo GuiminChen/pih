@@ -386,7 +386,7 @@ endforeach()
   set(PIH_MODEL_MANIFEST
       ${PIH_MANIFEST_PREFIX}/pih.model.deepseek-v4-flash/manifest.json)
   pih_require_manifest_contract(
-    ${PIH_MODEL_MANIFEST} provides inference.text.v2 pih.inference.text.v2
+    ${PIH_MODEL_MANIFEST} provides inference.text.v3 pih.inference.text.v3
     activation exactly_one serialized
   )
 pih_require_manifest_contract(
@@ -508,7 +508,7 @@ set(
     "engine.primary.v1|pih.model.deepseek-v4-flash|pih.engine.v1|2|2|1"
     "execution.controller.v1|pih.execution.default|pih.execution.controller.v1|3|2|1"
     "execution.default.v1|pih.execution.default|pih.execution.default.v1|3|2|1"
-    "inference.text.v2|pih.model.deepseek-v4-flash|pih.inference.text.v2|2|2|1"
+    "inference.text.v3|pih.model.deepseek-v4-flash|pih.inference.text.v3|3|2|1"
     "inference.tokens.v1|pih.model.deepseek-v4-flash|pih.inference.tokens.v1|2|2|1"
     "memory.host-spill.v1|pih.memory.host-spill|pih.memory.host-spill.v1|2|2|1"
     "pih.kernels.deepseek-v4.sm89|pih.kernels.deepseek-v4.sm89|pih.deepseek-sm89-kernel-pack.v1|3|2|1"

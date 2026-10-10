@@ -23,7 +23,7 @@ DeepSeekDeferredNativePlanCompiler::Create(
   const auto world_size = topology.world_size();
   if (descriptor.engine_epoch == 0 || descriptor.plan_sequence == 0 ||
       descriptor.phase == DeepSeekPlanPhase::kDrain ||
-      descriptor.token_count == 0 || descriptor.sequence_count != 1 ||
+      descriptor.token_count == 0 || descriptor.sequence_count == 0 ||
       rank_compilers.size() != world_size ||
       input_assemblers.size() != world_size) {
     return Status::InvalidArgument(

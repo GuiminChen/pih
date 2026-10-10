@@ -23,6 +23,12 @@ class DeepSeekDecodeAttentionWorkProvider {
   virtual Result<const DeepSeekDecodeAttentionWork*> resolve(
       std::uint32_t layer,
       const DeepSeekPipelinePlanDescriptor& plan) = 0;
+  virtual Result<std::span<const DeepSeekDecodeAttentionWork>> resolve_batch(
+      std::uint32_t layer, const DeepSeekPipelinePlanDescriptor& plan) {
+    auto work = resolve(layer, plan);
+    if (!work.ok()) return work.status();
+    return std::span<const DeepSeekDecodeAttentionWork>(*work, 1);
+  }
 };
 
 struct DeepSeekChunkAttentionWork final {
@@ -39,6 +45,12 @@ class DeepSeekChunkAttentionWorkProvider {
   virtual Result<const DeepSeekChunkAttentionWork*> resolve(
       std::uint32_t layer,
       const DeepSeekPipelinePlanDescriptor& plan) = 0;
+  virtual Result<std::span<const DeepSeekChunkAttentionWork>> resolve_batch(
+      std::uint32_t layer, const DeepSeekPipelinePlanDescriptor& plan) {
+    auto work = resolve(layer, plan);
+    if (!work.ok()) return work.status();
+    return std::span<const DeepSeekChunkAttentionWork>(*work, 1);
+  }
 };
 
 class DeepSeekAttentionStageOperatorBackend final
@@ -65,6 +77,10 @@ class DeepSeekAttentionStageOperatorBackend final
   DeepSeekChunkAttentionWorkProvider* chunk_provider_ = nullptr;
   const DeepSeekDecodeAttentionWork* work_ = nullptr;
   DeepSeekAttentionLayerCoordinator* active_coordinator_ = nullptr;
+  std::span<const DeepSeekDecodeAttentionWork> decode_batch_;
+  std::span<const DeepSeekChunkAttentionWork> chunk_batch_;
+  std::size_t sequence_cursor_ = 0;
+  Status launch_sequence();
   Mode mode_ = Mode::kIdle;
 };
 

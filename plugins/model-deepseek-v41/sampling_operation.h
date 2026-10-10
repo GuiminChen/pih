@@ -14,6 +14,9 @@ class SamplingOperation final {
   static Result<SamplingOperation> Start(const HeadOperation& head, SamplingLaunch launch,
       const SamplingIdentity& identity, EngramDeviceRegion host_candidate,
       const EngramCompletionResources& resources, Clock::time_point deadline);
+  static Result<SamplingOperation> StartPacked(const HeadOperation& head, std::uint32_t member, SamplingLaunch launch,
+      const SamplingIdentity& identity, EngramDeviceRegion host_candidate,
+      const EngramCompletionResources& resources, Clock::time_point deadline);
   Result<bool> Poll();
   Result<SamplingObservation> Candidate() const;
  private:

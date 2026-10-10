@@ -27,6 +27,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -61,10 +62,15 @@ bool BoundedCString(const char* value, std::size_t maximum) noexcept {
 }
 
 struct State final {
-  std::mutex text_mutex;
+  std::shared_mutex text_mutex;
+  std::unique_ptr<pih::deepseek_plugin::BatchGenerator> text_batch;
+  uint32_t maximum_batch_sequences{1};
+  uint32_t maximum_batch_tokens{1};
+  uint32_t maximum_pending_requests{64};
+  std::atomic<uint32_t> active_text_calls{0};
   std::unique_ptr<pih::plugin_text::DeepSeekSemanticArtifacts> text_semantic;
   pih_engine_handle_v1 text_handle{sizeof(pih_engine_handle_v1), PIH_ENGINE_ABI_VERSION_V1};
-  bool text_failed{};
+  std::atomic<bool> text_failed{false};
   uint32_t text_generation_timeout_ms{};
   std::mutex engine_mutex;
   std::atomic<uint32_t> phase{};
@@ -709,6 +715,7 @@ pih_status_v1 CreateCore(void* context,
   }
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   if (state.host == nullptr ||
       state.host->activation_epoch != request->activation_epoch ||
       state.phase.load() != 4 || state.engine_instance != nullptr ||
@@ -753,6 +760,8 @@ pih_status_v1 CreateCore(void* context,
       state.engine_generation_issued = true;
       state.context_capacity = config.attention_reserved_tokens_per_sequence;
       state.prefill_chunk = config.maximum_prefill_chunk_tokens;
+      state.maximum_batch_sequences = config.maximum_decode_sequences;
+      state.maximum_batch_tokens = config.maximum_decode_sequences;
     } else if (engine->instance != nullptr) {
       if (engine->instance != &state ||
           engine->activation_epoch != request->activation_epoch ||
@@ -806,6 +815,7 @@ pih_status_v1 AdmitCore(void* context, const pih_engine_handle_v1* engine) {
   }
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   if (state.phase.load() != 4 || state.engine_instance == nullptr ||
       engine->instance != state.engine_handle_identity ||
       engine->activation_epoch != state.engine_activation_epoch ||
@@ -869,6 +879,7 @@ pih_status_v1 ExecuteSmokeRequestCore(
   }
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   if (state.phase.load() != 4 || state.engine_instance == nullptr ||
       engine->instance != state.engine_handle_identity ||
       engine->activation_epoch != state.engine_activation_epoch ||
@@ -985,6 +996,7 @@ pih_status_v1 GenerateTokens(void* context, const pih_engine_handle_v1* engine,
     }
     auto& state = *static_cast<State*>(context);
     std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
     if (state.phase.load() != 4 || !state.engine_instance ||
         engine->instance != state.engine_handle_identity ||
         engine->activation_epoch != state.engine_activation_epoch ||
@@ -1027,6 +1039,7 @@ pih_status_v1 DestroyCore(void* context, pih_engine_handle_v1* engine) {
   }
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   if (state.phase.load() != 4 ||
       engine->instance != state.engine_handle_identity ||
       engine->activation_epoch != state.engine_activation_epoch ||
@@ -1125,7 +1138,7 @@ pih_status_v1 LoadText(void* context, const char* configuration, uint64_t bytes)
       if (!result) throw std::invalid_argument("text configuration field missing");
       return *result;
     };
-    if (value.object().size() != 5 || field("schema").string() != "pih.deepseek-v4-flash.text.v1")
+    if (value.object().size() != 8 || field("schema").string() != "pih.deepseek-v4-flash.text.v2")
       throw std::invalid_argument("text configuration schema invalid");
     const auto root = field("deployment_root").string();
     const auto semantic_root = field("semantic_snapshot").string();
@@ -1146,8 +1159,20 @@ pih_status_v1 LoadText(void* context, const char* configuration, uint64_t bytes)
     request.configuration_size = native_configuration.size();
     const auto created = Create(context, &request, &state.text_handle);
     if (!pih_status_is_ok_v1(&created)) return created; // close retains any rollback handle
-    state.text_semantic = std::move(semantic); state.text_failed = false;
     state.text_generation_timeout_ms = static_cast<uint32_t>(timeout);
+    const auto batch_sequences = field("maximum_batch_sequences").integer();
+    const auto batch_tokens = field("maximum_batch_tokens").integer();
+    const auto pending = field("maximum_pending_requests").integer();
+    if (batch_sequences < 1 || batch_sequences > state.maximum_batch_sequences ||
+        batch_tokens < batch_sequences || batch_tokens > state.prefill_chunk || batch_tokens > 4096 ||
+        pending < 1 || pending > 4096)
+      throw std::invalid_argument("DeepSeek batch bounds exceed sealed capacity");
+    state.maximum_batch_sequences = static_cast<uint32_t>(batch_sequences);
+    state.maximum_batch_tokens = static_cast<uint32_t>(batch_tokens);
+    state.maximum_pending_requests = static_cast<uint32_t>(pending);
+    state.text_batch = std::make_unique<pih::deepseek_plugin::BatchGenerator>(*state.engine_instance,
+        state.maximum_batch_sequences, state.maximum_batch_tokens, state.maximum_pending_requests);
+    state.text_semantic = std::move(semantic); state.text_failed = false;
     return Status(PIH_STATUS_OK_V1);
   } catch (const std::invalid_argument&) {
     return Status(PIH_STATUS_INVALID_ARGUMENT_V1, "deepseek_text_configuration_or_semantics_invalid");
@@ -1159,30 +1184,49 @@ pih_status_v1 LoadText(void* context, const char* configuration, uint64_t bytes)
 }
 
 pih_status_v1 CompleteText(void* context, uint32_t chat, const char* request, uint64_t bytes,
-    char* response, uint64_t capacity, uint64_t* written, const pih_text_output_sink_v2* sink) noexcept {
+    char* response, uint64_t capacity, uint64_t* written, const pih_text_output_sink_v3* sink) noexcept {
   if (written) *written = 0;
   if (!context || chat > 1 || !request || !bytes || bytes > 1024 * 1024 || !response || !capacity || !written ||
-      !sink || sink->struct_size != sizeof(*sink) || sink->contract_version != PIH_TEXT_INFERENCE_ABI_V2 ||
+      !sink || sink->struct_size != sizeof(*sink) || sink->contract_version != PIH_TEXT_INFERENCE_ABI_V3 ||
       !sink->start || !sink->write || !sink->cancelled)
     return Status(PIH_STATUS_INVALID_ARGUMENT_V1, "deepseek_text_request_invalid");
   auto& state = *static_cast<State*>(context);
   try {
-    std::unique_lock text_lock(state.text_mutex, std::try_to_lock);
+    std::shared_lock text_lock(state.text_mutex, std::try_to_lock);
     if (!text_lock.owns_lock()) return Status(PIH_STATUS_UNAVAILABLE_V1, "text_engine_busy");
-    std::lock_guard engine_lock(state.engine_mutex);
-    if (!state.text_semantic || state.text_failed || !state.engine_instance || state.engine_snapshot_pending ||
+    {
+      std::lock_guard lock(state.engine_mutex);
+      if (state.active_text_calls.load() >= state.maximum_batch_sequences + state.maximum_pending_requests)
+        return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, "deepseek_pending_queue_full");
+      ++state.active_text_calls;
+    }
+    struct CallLease {
+      std::atomic<uint32_t>& calls;
+      ~CallLease() { --calls; }
+    } call_lease{state.active_text_calls};
+
+    if (!state.text_batch || !state.text_semantic || state.text_failed || !state.engine_instance || state.engine_snapshot_pending ||
         state.phase.load() != 4 || !pih_engine_handle_is_live_v1(&state.text_handle) ||
         state.text_handle.instance != state.engine_handle_identity)
       return Status(PIH_STATUS_FAILED_PRECONDITION_V1, "text_engine_not_ready");
+    uint64_t request_id, generation;
+    {
+      std::lock_guard lock(state.engine_mutex);
+      if (state.next_request_id == std::numeric_limits<uint64_t>::max() || state.next_request_generation == std::numeric_limits<uint64_t>::max())
+        return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1,"deepseek_identity_exhausted");
+      request_id = state.next_request_id++; generation = state.next_request_generation++;
+    }
+    uint64_t local_plan = 1;
     try {
       auto result = pih::deepseek_plugin::CompleteText(*state.engine_instance, *state.text_semantic,
           state.context_capacity, state.prefill_chunk, state.text_generation_timeout_ms,
-          state.next_request_id, state.next_request_generation,
-          state.next_plan_sequence, chat != 0, {request, static_cast<size_t>(bytes)}, *sink);
+          request_id, generation,
+          local_plan, chat != 0, {request, static_cast<size_t>(bytes)}, *sink, state.text_batch.get());
       if (!result.ok()) {
         if (result.status().code() != pih::StatusCode::kInvalidArgument &&
             result.status().code() != pih::StatusCode::kUnavailable &&
-            result.status().code() != pih::StatusCode::kDeadlineExceeded) state.text_failed = true;
+            result.status().code() != pih::StatusCode::kDeadlineExceeded &&
+            result.status().code() != pih::StatusCode::kResourceExhausted) state.text_failed = true;
         return EngineStatus(result.status());
       }
       if (result->size() > capacity) return Status(PIH_STATUS_RESOURCE_EXHAUSTED_V1, "text_response_buffer_too_small");
@@ -1202,6 +1246,7 @@ pih_status_v1 CloseText(void* context) noexcept {
   try {
     std::unique_lock text_lock(state.text_mutex, std::try_to_lock);
     if (!text_lock.owns_lock()) return Status(PIH_STATUS_UNAVAILABLE_V1, "text_engine_busy");
+    state.text_batch.reset();
     if (!pih_engine_handle_is_empty_v1(&state.text_handle)) {
       const auto status = Destroy(context, &state.text_handle);
       if (!pih_status_is_ok_v1(&status)) return status;
@@ -1244,11 +1289,12 @@ pih_status_v1 RegisterCore(void* context) {
       state.host->register_capability(state.host->context, &capability),
       "capability_registry_status_invalid");
   if (!pih_status_is_ok_v1(&generation_status)) return generation_status;
-  static pih_text_inference_api_v2 text_api{
-      sizeof(pih_text_inference_api_v2), PIH_TEXT_INFERENCE_ABI_V2, &state,
-      "deepseek-ai/DeepSeek-V4-Flash-0731", &LoadText, &CompleteText, &CloseText};
-  capability.capability_id = "inference.text.v2";
-  capability.contract_id = "pih.inference.text.v2";
+  static pih_text_inference_api_v3 text_api{
+      sizeof(pih_text_inference_api_v3), PIH_TEXT_INFERENCE_ABI_V3, &state,
+      "deepseek-ai/DeepSeek-V4-Flash-0731", &LoadText, &CompleteText, &CloseText, +[](void* context) -> uint32_t { auto& state = *static_cast<State*>(context); std::shared_lock lock(state.text_mutex); return state.text_batch ? state.maximum_batch_sequences + state.maximum_pending_requests : 1; }};
+  capability.capability_id = "inference.text.v3";
+  capability.contract_id = "pih.inference.text.v3";
+  capability.threading_model = PIH_CAPABILITY_THREADING_CONCURRENT_V1;
   capability.api = &text_api;
   const auto text_status = CheckedCapabilityStatus(
       state.host->register_capability(state.host->context, &capability), "capability_registry_status_invalid");
@@ -1462,6 +1508,7 @@ pih_status_v1 ReadyCore(void* context) { return Advance(context, 3); }
 pih_status_v1 DrainCore(void* context) {
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   if (state.engine_cleanup_failed) {
     return Status(PIH_STATUS_FAILED_PRECONDITION_V1,
                   "deepseek_engine_cleanup_failed");
@@ -1478,6 +1525,7 @@ pih_status_v1 DrainCore(void* context) {
 pih_status_v1 StopCore(void* context) {
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   if (state.phase.load() == 3) {
     state.phase.store(6);
     return Status(PIH_STATUS_OK_V1);
@@ -1487,6 +1535,7 @@ pih_status_v1 StopCore(void* context) {
 pih_status_v1 DisposeCore(void* context) {
   auto& state = *static_cast<State*>(context);
   std::lock_guard transaction(state.engine_mutex);
+  if (state.text_batch) return Status(PIH_STATUS_UNAVAILABLE_V1, "deepseek_text_executor_owns_engine");
   const auto phase = state.phase.load();
   if (phase != 1 && phase != 2 && phase != 6) {
     return Status(PIH_STATUS_FAILED_PRECONDITION_V1,

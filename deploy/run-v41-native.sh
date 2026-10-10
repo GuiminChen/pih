@@ -9,6 +9,7 @@ usage() {
 Native V4.1 development entry (Linux only; not a qualified release profile):
   bash deploy/run-v41-native.sh build-service /absolute/build-dir /absolute/new-bundle [jobs]
   bash deploy/run-v41-native.sh seal-rank /absolute/bundle
+  bash deploy/run-v41-native.sh batch-config INPUT_JSON NEW_OUTPUT_JSON [sequences] [tokens] [pending]
   bash deploy/run-v41-native.sh seal-service /absolute/bundle /absolute/config.json TRUSTED_SHA256
   bash deploy/run-v41-native.sh serve /absolute/bundle [port]
   bash deploy/run-v41-native.sh probe /absolute/new-observation.json [port] [max_tokens]
@@ -62,6 +63,12 @@ case "$action" in
     seal-rank)
         [[ $# == 1 ]] || { usage; exit 2; }
         cmake "-DBUNDLE=$1" -DMODE=rank -P "$repository_directory/cmake/PIHSealV41.cmake"
+        ;;
+    batch-config)
+        [[ $# -ge 2 && $# -le 5 ]] || { usage; exit 2; }
+        exec python3 "$repository_directory/tools/configure_v41_batch.py" \
+            --input "$1" --output "$2" --maximum-batch-sequences "${3:-4}" \
+            --maximum-batch-tokens "${4:-4096}" --maximum-pending-requests "${5:-64}"
         ;;
     seal-service)
         [[ $# == 3 ]] || { usage; exit 2; }

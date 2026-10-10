@@ -5,6 +5,6 @@
   "artifact_kind":"native_plugin",
   "plugin_abi":"pih.native-plugin.v1",
   "entry_symbol":"pih_plugin_entry_v1",
-  "provides":[{"capability_id":"surface.text-http.v2","contract_id":"pih.surface.text-http.v2","scope":"activation","cardinality":"exactly_one","threading_model":"serialized"}],
-  "requires":[{"capability_id":"inference.text.v2","contract_id":"pih.inference.text.v2","scope":"activation","cardinality":"exactly_one"}]
+  "provides":[{"capability_id":"surface.text-http.v3","contract_id":"pih.surface.text-http.v3","scope":"activation","cardinality":"exactly_one","threading_model":"serialized"}],
+  "requires":[{"capability_id":"inference.text.v3","contract_id":"pih.inference.text.v3","scope":"activation","cardinality":"exactly_one"}]
 }

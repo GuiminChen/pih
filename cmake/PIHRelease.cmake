@@ -55,6 +55,8 @@ install(FILES LICENSE THIRD_PARTY_NOTICES.md plugins/common/DEEPSEEK_LICENSE
 install(PROGRAMS deploy/run-native.sh deploy/run-v41-native.sh
     DESTINATION deploy COMPONENT pih-release)
 install(FILES deploy/native.py DESTINATION deploy COMPONENT pih-release)
+install(FILES tools/configure_v41_batch.py tools/verify_batch_service.py
+    DESTINATION tools COMPONENT pih-release)
 install(FILES deploy/development/deepseek-v4-flash-rtx4090d-pp1.lock
     DESTINATION deploy/development COMPONENT pih-release)
 install(FILES cmake/PIHSealV41.cmake cmake/PIHSealDevelopmentLock.cmake

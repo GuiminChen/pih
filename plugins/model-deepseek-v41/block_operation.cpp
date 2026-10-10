@@ -7,6 +7,7 @@ BlockOperation::BlockOperation(BlockOperation&& other) noexcept
       workspace_(other.workspace_), sequence_(other.sequence_), host_counts_(other.host_counts_), communicator_(other.communicator_),
       reservation_(other.reservation_), resources_(other.resources_), deadline_(other.deadline_),
       sources_(std::move(other.sources_)), engram_(std::move(other.engram_)), block_(std::move(other.block_)), state_(other.state_) {
+  defer_block_ = other.defer_block_;
   other.workspace_ = nullptr; other.sequence_ = nullptr; other.state_ = BlockOperationState::kFailed;
 }
 BlockOperation::~BlockOperation() {
@@ -23,7 +24,8 @@ Result<BlockOperation> BlockOperation::Start(const FlashConfig& config, BlockSeq
     const CompressorPlan& compressor_plan, EngramDeviceRegion compressor_arena,
     const IndexerPlan& indexer_plan, EngramDeviceRegion indexer_arena,
     EngramDeviceRegion host_counts, std::uintptr_t communicator,
-    const EngramCompletionResources& resources, Clock::time_point deadline) {
+    const EngramCompletionResources& resources, Clock::time_point deadline,
+    bool defer_block, std::uint64_t shared_reservation) {
   if (Clock::now() >= deadline) return Status::DeadlineExceeded("Block deadline expired before preparation");
   if (sequence.failed_ || sequence.active_ || (!sequence.layer_ && !sequence.input_ready_))
     return Status::FailedPrecondition("Block requires an idle sequence with completed step input");
@@ -150,7 +152,7 @@ Result<BlockOperation> BlockOperation::Start(const FlashConfig& config, BlockSeq
   auto bound = BindPreparedBlockSources(config, sources, std::move(block_template)); if (!bound.ok()) return bound.status();
   const auto& d = bound->ffn.dispatch;
   if (d.world_size == 1) return Status::InvalidArgument("Block operation requires 2, 4 or 8 ranks");
-  const auto binding = workspace.ValidateBinding(d.tokens, d.stream, resources.event); if (!binding.ok()) return binding;
+  const auto binding = workspace.ValidateBinding(d.tokens, d.stream, resources.event, shared_reservation); if (!binding.ok()) return binding;
   const auto& allocation = workspace.allocation_record();
   auto retained = sequence.Retained(); retained.push_back(*arena);
   const auto liveness = ValidateBlockCrossStageBuffers(config, sources, *bound, *weights, {allocation.address, allocation.bytes}, &phases,
@@ -168,9 +170,10 @@ Result<BlockOperation> BlockOperation::Start(const FlashConfig& config, BlockSeq
   operation.weights_ = std::move(*weights); operation.workspace_ = &workspace;
   operation.host_counts_ = host_counts; operation.communicator_ = communicator;
   operation.resources_ = resources; operation.deadline_ = deadline;
+  operation.defer_block_ = defer_block;
   if (Clock::now() >= deadline) return Status::DeadlineExceeded("Block deadline expired during preflight");
-  const auto reserved = workspace.Reserve(); if (!reserved.ok()) return reserved.status();
-  operation.reservation_ = *reserved;
+  if (shared_reservation) operation.reservation_ = shared_reservation;
+  else { const auto reserved = workspace.Reserve(); if (!reserved.ok()) return reserved.status(); operation.reservation_ = *reserved; }
   const auto claimed = sequence.Reserve(sources, *bound, communicator); if (!claimed.ok()) return claimed;
   operation.sequence_ = &sequence;
   sequence.weight_arena_ = *arena;
@@ -200,6 +203,7 @@ Result<BlockOperationState> BlockOperation::Advance() {
 Result<BlockOperationState> BlockOperation::AdvanceImpl() {
   if (state_ == BlockOperationState::kFailed) return Status::FailedPrecondition("Block operation failed or moved from");
   if (state_ == BlockOperationState::kComplete) return state_;
+  if (state_ == BlockOperationState::kSourcesReady) return state_;
   const auto previous = state_; state_ = BlockOperationState::kFailed;
   if (Clock::now() >= deadline_) return Status::DeadlineExceeded("Block operation deadline expired");
   if (previous == BlockOperationState::kWaitingEngram) {
@@ -211,6 +215,7 @@ Result<BlockOperationState> BlockOperation::AdvanceImpl() {
   if (previous == BlockOperationState::kWaitingSources) {
     const auto ready = sources_->Poll(); if (!ready.ok()) return ready.status();
     if (!*ready) { state_ = previous; return state_; }
+    if (defer_block_) { state_ = BlockOperationState::kSourcesReady; return state_; }
     auto block = PreparedBlockOperation::Start(config_, block_launch_, weights_, *workspace_, host_counts_,
         communicator_, resources_, deadline_, reservation_);
     if (!block.ok()) return block.status();
@@ -220,5 +225,20 @@ Result<BlockOperationState> BlockOperation::AdvanceImpl() {
   state_ = *ready == PreparedBlockState::kComplete ? BlockOperationState::kComplete : BlockOperationState::kWaitingBlock;
   if (state_ == BlockOperationState::kComplete) sequence_->Complete();
   return state_;
+}
+Result<PreparedBlockLaunch> BlockOperation::PreparedLaunch() const {
+  if (!defer_block_ || state_ != BlockOperationState::kSourcesReady || !sequence_ || sequence_->failed_)
+    return Status::FailedPrecondition("Deferred block sources have not completed");
+  return block_launch_;
+}
+Status BlockOperation::CompletePacked(const PreparedBlockOperation& completed, EngramDeviceRegion residual, EngramDeviceRegion pre) {
+  if (!defer_block_ || state_ != BlockOperationState::kSourcesReady || !sequence_ || sequence_->failed_ ||
+      !residual.address || residual.address % 2 || residual.bytes != sequence_->pending_tokens_ * 4ULL * 5120 * 2 ||
+      !pre.address || pre.address % 4 || pre.bytes != sequence_->pending_tokens_ * 4ULL * 4 ||
+      residual.bytes > UINTPTR_MAX - residual.address || pre.bytes > UINTPTR_MAX - pre.address ||
+      workspace_->state() != ExpertWorkspaceState::kReady || completed.state() != PreparedBlockState::kComplete)
+    return Status::FailedPrecondition("Packed block completion requires retired shared workspace and member row extents");
+  sequence_->pending_residual_ = residual; sequence_->pending_pre_ = pre;
+  sequence_->Complete(); state_ = BlockOperationState::kComplete; return Status::Ok();
 }
 }  // namespace pih::deepseek_v41

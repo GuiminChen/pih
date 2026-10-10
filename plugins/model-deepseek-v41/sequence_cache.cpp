@@ -2,6 +2,24 @@
 #include <limits>
 
 namespace pih::deepseek_v41 {
+Result<PackedSequenceCachePlan> PackedSequenceCachePlan::Create(const FlashConfig& config,
+    std::uint32_t maximum_positions, std::uint32_t maximum_sequences, std::uint64_t byte_budget) {
+  if (!maximum_sequences || maximum_sequences > 32)
+    return Status::InvalidArgument("Packed sequence cache capacity outside native protocol bounds");
+  auto sequence = SequenceCachePlan::Create(config, maximum_positions, byte_budget / maximum_sequences);
+  if (!sequence.ok()) return sequence.status();
+  return PackedSequenceCachePlan(std::move(*sequence), maximum_sequences);
+}
+Result<EngramDeviceRegion> PackedSequenceCachePlan::SequenceArena(EngramDeviceRegion arena, std::uint32_t slot) const {
+  if (slot >= sequences_ || !arena.address || arena.address % 256 || arena.bytes != bytes() ||
+      arena.bytes > std::numeric_limits<std::uintptr_t>::max() - arena.address)
+    return Status::InvalidArgument("Packed sequence cache allocation or slot invalid");
+  return EngramDeviceRegion{arena.address + slot * sequence_.bytes(), sequence_.bytes()};
+}
+Result<LayerCacheRegions> PackedSequenceCachePlan::Bind(EngramDeviceRegion arena, std::uint32_t slot, std::uint32_t layer) const {
+  auto sequence = SequenceArena(arena, slot); if (!sequence.ok()) return sequence.status();
+  return sequence_.Bind(*sequence, layer);
+}
 Result<SequenceCachePlan> SequenceCachePlan::Create(const FlashConfig& config,
     std::uint32_t maximum, std::uint64_t budget) {
   if (config.config_sha256() == Sha256Digest{} || !maximum || maximum > FlashConfig::kMaximumPositions)

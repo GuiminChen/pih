@@ -1,6 +1,9 @@
 # Support boundaries
 English | [中文](support.zh.md)
 
+For the new multi-sequence revision, [batching](batching.md) distinguishes source,
+CPU execution, CUDA compilation, production linking and the outstanding hardware gates.
+
 Code/build acceptance covers Qwen 4090 D/H100, DeepSeek V4-0731 PP1 and DeepSeek V4.1 B300.
 **Hardware execution is unverified**; production hardware qualification, numerical correctness, capacity and performance are not claimed.
 The Python package is HTTP-only; Windows/macOS local inference is not supported. Development reference runtimes are absent from the public repository and default distributions.

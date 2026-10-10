@@ -22,6 +22,7 @@ class NcclBootstrapBroker final {
   // has been cancelled. The service must coordinate this with rank lifecycle.
   Status BeginRetirement(Clock::time_point deadline);
   Result<bool> PollRetirement();
+  Status ResumeRetirement(Clock::time_point deadline);
   NcclBrokerState state() const noexcept { return state_; }
   Clock::time_point lifetime_deadline() const noexcept { return lifetime_; }
   const WorkerCgroup* cgroup_owner() const noexcept { return cgroup_; }

@@ -14,7 +14,7 @@ template<class T> Status Submit(uint32_t operation, T x) {
 }
 Status BindSm103Kernels(const pih_v41_sm103_kernels_api_v1& api) {
   if (bound || api.struct_size != sizeof(api) || api.contract_version != PIH_V41_KERNEL_ABI_V1 ||
-      api.target_sm != 103 || api.operation_count != 40 || !api.admit_device || !api.launch || !api.identity ||
+      api.target_sm != 103 || api.operation_count != 42 || !api.admit_device || !api.launch || !api.identity ||
       api.identity->struct_size != sizeof(pih_kernel_pack_identity_v1) ||
       api.identity->abi_version != PIH_KERNEL_PACK_ABI_VERSION_V1 ||
       !api.identity->pack_id || !api.identity->pack_abi || !api.identity->architecture ||
@@ -57,7 +57,11 @@ Status LaunchCompressorPool(const CompressorPoolLaunch& x) { return Submit(29, x
 Status LaunchCompressorProjection(const CompressorProjectionLaunch& x) { return Submit(30, x); }
 Status LaunchCompressedKv(const CompressedKvLaunch& x) { return Submit(31, x); }
 Status LaunchWindowKv(const WindowKvLaunch& x) { return Submit(32, x); }
-Status LaunchHeadProjection(const HeadProjectionLaunch& x) { return Submit(33, x); }
+Status LaunchHeadProjection(const HeadProjectionLaunch& x) {
+  if (x.row_indices.bytes || x.sequences != 1 || x.input_rows != 1) return Submit(41, kernel_wire::PackedHeadLaunch{x});
+  return Submit(33, x);
+}
+Status LaunchPackedLogitsTranspose(const PackedLogitsTransposeLaunch& x) { return Submit(42, x); }
 Status LaunchTokenEmbeddingLookup(const TokenEmbeddingLaunch& x) { return Submit(34, x); }
 Status LaunchTokenEmbeddingExpand(const TokenEmbeddingLaunch& x) { return Submit(35, x); }
 Status LaunchRouter(const RouterLaunch& x) { return Submit(36, x); }

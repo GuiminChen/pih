@@ -3,6 +3,7 @@
 #include <array>
 #include <optional>
 #include <span>
+#include <vector>
 
 #include "pih/model/deepseek_attention_stage_backend.h"
 
@@ -31,10 +32,12 @@ class DeepSeekBoundDecodeAttentionWorkProvider final
   Result<const DeepSeekDecodeAttentionWork*> resolve(
       std::uint32_t layer,
       const DeepSeekPipelinePlanDescriptor& plan) override;
+  Result<std::span<const DeepSeekDecodeAttentionWork>> resolve_batch(
+      std::uint32_t layer, const DeepSeekPipelinePlanDescriptor& plan) override;
 
  private:
   DeepSeekStageRange owned_layers_;
-  std::array<std::array<DeepSeekDecodeAttentionWork, 43>, 2> banks_{};
+  std::array<std::array<std::vector<DeepSeekDecodeAttentionWork>, 43>, 2> banks_{};
   std::size_t active_bank_ = 0;
   std::optional<DeepSeekPipelinePlanDescriptor> descriptor_;
 };
@@ -52,10 +55,12 @@ class DeepSeekBoundChunkAttentionWorkProvider final
   Result<const DeepSeekChunkAttentionWork*> resolve(
       std::uint32_t layer,
       const DeepSeekPipelinePlanDescriptor& plan) override;
+  Result<std::span<const DeepSeekChunkAttentionWork>> resolve_batch(
+      std::uint32_t layer, const DeepSeekPipelinePlanDescriptor& plan) override;
 
  private:
   DeepSeekStageRange owned_layers_;
-  std::array<std::array<DeepSeekChunkAttentionWork, 43>, 2> banks_{};
+  std::array<std::array<std::vector<DeepSeekChunkAttentionWork>, 43>, 2> banks_{};
   std::size_t active_bank_ = 0;
   std::optional<DeepSeekPipelinePlanDescriptor> descriptor_;
 };

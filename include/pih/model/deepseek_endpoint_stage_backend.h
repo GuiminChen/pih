@@ -13,6 +13,7 @@ struct DeepSeekEndpointStageSequenceWork final {
   DeepSeekAttentionSequenceTransaction* transaction = nullptr;
   DeepSeekEmbeddingLaunch embedding;
   DeepSeekHeadSequenceSubmission head;
+  std::uint32_t sequence_index = 0;
 };
 
 class DeepSeekEndpointStageWorkProvider {

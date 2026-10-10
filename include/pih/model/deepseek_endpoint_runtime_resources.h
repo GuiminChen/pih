@@ -14,15 +14,21 @@ class DeepSeekEndpointRuntimeResources final {
  public:
   static Result<DeepSeekEndpointRuntimeResources> Allocate(
       DeepSeekStagePlan stage, DeepSeekEndpointSequenceOperations* operations,
-      RegisteredPinnedAllocator& allocator);
+      RegisteredPinnedAllocator& allocator, std::uint32_t maximum_sequences = 1);
   static Result<DeepSeekEndpointRuntimeResources> Allocate(
       DeepSeekStagePlan stage, DeepSeekEndpointSequenceOperations& operations,
-      RegisteredPinnedAllocator& allocator) {
-    return Allocate(stage, &operations, allocator);
+      RegisteredPinnedAllocator& allocator, std::uint32_t maximum_sequences = 1) {
+    return Allocate(stage, &operations, allocator, maximum_sequences);
   }
 
   [[nodiscard]] DeepSeekEndpointSequenceExecutor* executor() noexcept {
     return executor_.get();
+  }
+  [[nodiscard]] DeepSeekEndpointRuntimeResources& sequence(std::uint32_t index) {
+    return index == 0 ? *this : *additional_sequences_.at(index - 1);
+  }
+  [[nodiscard]] std::uint32_t maximum_sequences() const noexcept {
+    return static_cast<std::uint32_t>(additional_sequences_.size() + 1);
   }
   [[nodiscard]] bool owns_embedding() const noexcept {
     return stage_.owns_embedding;
@@ -59,6 +65,7 @@ class DeepSeekEndpointRuntimeResources final {
   std::unique_ptr<Buffer> host_top_ids_;
   std::unique_ptr<Buffer> host_top_logprobs_;
   std::unique_ptr<DeepSeekEndpointSequenceExecutor> executor_;
+  std::vector<std::unique_ptr<DeepSeekEndpointRuntimeResources>> additional_sequences_;
 };
 
 }  // namespace pih

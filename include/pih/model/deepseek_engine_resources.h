@@ -105,7 +105,8 @@ class DeepSeekEngineResources final {
   assemble_rank_endpoint_plan_input(
       std::uint32_t rank, std::uint32_t token_count,
       std::uintptr_t token_ids_u32, std::uintptr_t final_hc_bf16,
-      std::optional<DeepSeekPreparedSamplingInput> sampling = std::nullopt);
+      std::optional<DeepSeekPreparedSamplingInput> sampling = std::nullopt,
+      std::uint32_t sequence_index = 0);
 #if !defined(PIH_DEEPSEEK_DSPARK_DISABLED)
   Result<DeepSeekDsparkStageWork> assemble_rank_dspark_plan_input(
       std::uint32_t rank, DeepSeekPlanPhase phase,

@@ -36,4 +36,3 @@ class SupervisorExecution final {
 // child-free CPU process with normal SIGCHLD reaping semantics.
 Status AdmitSupervisorProcess();
 }
-

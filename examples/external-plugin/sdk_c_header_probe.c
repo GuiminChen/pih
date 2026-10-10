@@ -9,6 +9,7 @@
 #include "pih/contracts/engine_v1.h"
 #include "pih/contracts/token_generation_v1.h"
 #include "pih/contracts/text_inference_v2.h"
+#include "pih/contracts/text_inference_v3.h"
 #include "pih/contracts/qwen_kernels_v1.h"
 #include "pih/contracts/deepseek_kernels_v1.h"
 #include "pih/contracts/deepseek_v41_sm103_kernels_v1.h"
@@ -26,13 +27,13 @@
 #include "pih/contracts/verified_artifact_v1.h"
 #include "pih/contracts/artifact_snapshot_v1.h"
 
-_Static_assert(PIH_TEXT_INFERENCE_ABI_V2 == 2U, "unexpected text ABI");
-_Static_assert(sizeof(((pih_text_inference_api_v2*)0)->struct_size) == 4,
+_Static_assert(PIH_TEXT_INFERENCE_ABI_V3 == 3U, "unexpected text ABI");
+_Static_assert(sizeof(((pih_text_inference_api_v3*)0)->struct_size) == 4,
                "ABI struct_size must remain uint32_t");
 
 int pih_sdk_c_header_probe(void) {
-    pih_text_inference_api_v2 model = {0};
-    pih_text_output_sink_v2 sink = {0};
-    pih_text_service_api_v2 service = {0};
+    pih_text_inference_api_v3 model = {0};
+    pih_text_output_sink_v3 sink = {0};
+    pih_text_service_api_v3 service = {0};
     return (int)(model.struct_size + sink.struct_size + service.struct_size);
 }

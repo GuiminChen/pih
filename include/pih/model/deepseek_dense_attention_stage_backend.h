@@ -19,6 +19,8 @@ struct DeepSeekDenseAttentionStageSequenceWork final {
   std::uintptr_t sparse_query_bf16 = 0;
   std::uintptr_t sparse_kv_bf16 = 0;
   std::uintptr_t sparse_output_bf16 = 0;
+  std::uint32_t sequence_index = 0;
+  bool packed_tokens = false;
 };
 
 class DeepSeekDenseAttentionStageWorkProvider {

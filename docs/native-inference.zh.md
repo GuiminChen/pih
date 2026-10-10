@@ -71,7 +71,7 @@ bash deploy/run-v41-native.sh seal-rank /absolute/new-bundle
 
 按照该 Bundle 的 worker、helper、`v41-rank.lock` 的精确路径与 SHA-256、B300 rank
 放置、受委托的 cgroup 父目录及外部已验证模型制品，编写经过认证的
-`pih.deepseek-v41.supervisor.v1` 配置。完整字段和准入规则见
+`pih.deepseek-v41.supervisor.v2` 配置。完整字段和准入规则见
 [`SUPERVISOR_CONFIG.md`](../plugins/model-deepseek-v41/SUPERVISOR_CONFIG.md)。
 配置摘要必须来自独立可信的部署记录，不能对未经审核的输入现算摘要就当作信任依据。
 随后执行：
@@ -144,12 +144,12 @@ out/build/deepseek-4090d-pp1/bundle/deepseek-4090d-pp1/bin/pih-worker \
 V4.1 已有独立的固定 HF 配置解析器、原生模型插件、SM103 Kernel Pack、rank worker
 和 supervisor，位于 `plugins/model-deepseek-v41` 与
 `plugins/kernels/deepseek-v41-sm103`。它拒绝 V4-0731 配置，并且仅在封装的 V4.1
-Bundle 中注册 `inference.text.v2`。这条源码链已完成生产链接；仍未执行运行集成和模型
+Bundle 中注册 `inference.text.v3`。这条源码链已完成生产链接；仍未执行运行集成和模型
 验收；源码可编译不等于 B300 推理已经正确运行。
 
 ## DeepSeek V4-0731：原生文本服务
 
-模型插件现提供 `inference.text.v2`，使用已验证语义字节和原生 PP1 引擎。
+模型插件现提供 `inference.text.v3`，使用已验证语义字节和原生 PP1 引擎。
 启动命令只组合原生提供者与 `pih.surface.text-http`，不加载诊断 HTTP Surface，
 不启动 Python 模型后端。Linux RTX 4090 D 机器需 CUDA、ICU/OpenSSL 开发库：
 
@@ -187,7 +187,7 @@ penalty 及其他未实现字段。
 聊天和 `/v1/completions` 均支持 max_tokens、temperature 0–2、top_p (0,1]、
 非负整数 seed、布尔 stream 和 n=1；贪心 temperature=0 要求 top_p=1。
 原始补全使用字符串 prompt，不自动添加聊天模板，输出省略 EOS。输入加输出不得
-超过 Lock 中的上下文上限；启动器暂限定 4096，并非已验证容量。服务串行、仅回环
+超过 Lock 中的上下文上限；启动器暂限定 4096，并非已验证容量。服务有界并发、仅回环
 监听，无 TLS/认证；生成预算可配置，默认 10 分钟，中断后最多再等待当前设备计划 5 分钟再
 回收，不抢占 CUDA。完成清理的超时返回 504；生成结构错误或清理失败会终止 Worker。
 这些代码已完成交叉链接，硬件运行未验证。
@@ -455,7 +455,7 @@ NVIDIA 文档说明 CUDA 默认使用最快设备优先的启发式枚举，不�
 `GET /health`、`GET /readyz` 和 `GET /v1/models` 必须携带非空 Host，
 不接受请求体、传输编码、重复头或同一连接中已收到的流水线请求。
 Content-Length 可省略或严格为 `0`。这些端点与推理请求共用头部校验，
-不是额外的 GPU 自检；当前串行服务在生成期间也不能独立响应健康检查。
+不是额外的 GPU 自检；批处理服务的健康检查仅检查加载状态，不是 GPU 自检。
 
 请求解析错误使用明确状态码：未知路径为 404，错误方法为 405 并带 `Allow`，
 推理请求缺少 Content-Length 为 411，请求体过大为 413，不支持的推理媒体类型为
@@ -489,7 +489,7 @@ Qwen GPU 初始化失败（包括 C ABI 防护层转换的异常）会使当前�
 该行为防止进程正常退出时，析构函数再次清理可能仍在使用的设备资源。监督程序必须
 将非零退出视为失败，不能当作成功回收。本路径仅完成编译检查，未做故障注入测试。
 
-服务只监听 `127.0.0.1`，串行处理请求，无鉴权/TLS，不应直接暴露公网。
+服务只监听 `127.0.0.1`，有界并发处理请求，无鉴权/TLS，不应直接暴露公网。
 停止使用 Ctrl+C 或向 Worker 发 SIGTERM；在途生成在下一个调度边界提交取消，
 完成 drain 后关闭引擎，不抢占 CUDA kernel。SIGKILL 无法执行应用清理。
 
@@ -903,3 +903,5 @@ CUDA 设备、分配代次。rank 专家资源现提供不增加分配的共享�
 - 模型/分词器格式拒绝：确认是 Qwen3-0.6B 原始 BF16 或 PIH INT4，不跳过校验。
 - 二进制变动导致 Lock 摘要不匹配：重新运行启动脚本生成新 Lock，不编辑摘要。
 - HTTP 500：此次引擎已视为失败，Worker 退出清理后重新启动；保存失败日志。
+
+原生多序列配置、并发示例与本次验证范围见[批处理说明](batching.zh.md)。当前源码的 CUDA 编译与生产交叉链接已通过；Linux 服务执行与 GPU 验收仍未验证。

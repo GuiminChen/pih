@@ -12,10 +12,13 @@ HeadOperation::HeadOperation(HeadOperation&& other) noexcept
     : sequence_(other.sequence_), logits_(other.logits_), error_(other.error_), stream_(other.stream_), step_end_(other.step_end_),
       resources_(other.resources_), deadline_(other.deadline_), gather_(std::move(other.gather_)),
       completion_(std::move(other.completion_)), state_(other.state_) {
+  packed_sequences_ = std::move(other.packed_sequences_); packed_ends_ = std::move(other.packed_ends_);
+  gathered_logits_ = other.gathered_logits_; world_ = other.world_;
   other.sequence_ = nullptr; other.state_ = HeadOperationState::kFailed;
 }
 HeadOperation::~HeadOperation() {
   if (sequence_ && state_ != HeadOperationState::kComplete) sequence_->Fail();
+  if (sequence_ && state_ != HeadOperationState::kComplete) for (auto* member : packed_sequences_) member->Fail();
 }
 Result<HeadOperation> HeadOperation::Start(BlockSequence& sequence, ModelHeadLaunch x, const BackboneWeightUpload& weights,
     EngramDeviceRegion logits, std::uintptr_t communicator,
@@ -65,9 +68,73 @@ Result<HeadOperation> HeadOperation::Start(BlockSequence& sequence, ModelHeadLau
   operation.gather_.emplace(std::move(*submitted)); operation.state_ = HeadOperationState::kWaitingGather;
   return operation;
 }
+Result<HeadOperation> HeadOperation::StartPacked(const PackedRequest& plan,
+    std::span<BlockSequence* const> sequences, ModelHeadLaunch x, const BackboneWeightUpload& weights,
+    EngramDeviceRegion gathered_logits, EngramDeviceRegion logits, std::uintptr_t communicator,
+    const EngramCompletionResources& resources, Clock::time_point deadline) {
+  if (Clock::now() >= deadline || plan.spans().empty() || x.input.collapse.tokens != plan.tokens().size() ||
+      x.input.norm.rows != plan.tokens().size() || x.projection.sequences != plan.spans().size() ||
+      x.projection.input_rows != plan.tokens().size() || !x.projection.row_indices.bytes)
+    return Status::InvalidArgument("Packed head row geometry or deadline invalid");
+  auto arena = weights.Arena(); if (!arena.ok()) return arena.status();
+  auto norm = weights.Find("norm.weight"); if (!norm.ok()) return norm.status();
+  x.input.norm.weight = *norm; x.input.norm.weight_storage = EngramStorage::kBF16;
+  x.projection.input = x.input.norm.output;
+  auto bound = BindUploadedHead(weights, x); if (!bound.ok()) return bound.status(); x = *bound;
+  const auto valid = ValidateModelHead(x); if (!valid.ok()) return valid;
+  const auto transpose = ValidatePackedLogitsTranspose({gathered_logits, logits, x.projection.stream,
+      x.projection.sequences, x.projection.world_size}); if (!transpose.ok()) return transpose;
+  const Fp32GatherLaunch gather{x.projection.output, gathered_logits, x.projection.stream,
+      x.projection.world_size, x.projection.rank};
+  const auto transport = ValidateFp32Gather(gather, communicator); if (!transport.ok()) return transport;
+  const auto complete = ValidateEngramCompletionResources(resources); if (!complete.ok()) return complete;
+  HeadOperation operation;
+  operation.packed_sequences_.reserve(plan.spans().size()); operation.packed_ends_.reserve(plan.spans().size());
+  const std::array writes{x.input.collapse.output, x.input.norm.output, x.projection.output,
+      x.projection.error_flag, gathered_logits, logits};
+  for (unsigned i = 0; i < writes.size(); ++i) {
+    for (unsigned j = 0; j < i; ++j) if (Overlap(writes[i], writes[j]))
+      return Status::InvalidArgument("Packed head writable regions alias");
+    for (const auto read : {x.input.collapse.residual, x.input.collapse.pre, x.input.norm.weight,
+        x.projection.weight, x.projection.row_indices})
+      if (Overlap(writes[i], read)) return Status::InvalidArgument("Packed head overwrites live inputs");
+  }
+  for (const auto& span : plan.spans()) {
+    if (span.finish || span.cache_slot >= sequences.size() || !sequences[span.cache_slot])
+      return Status::InvalidArgument("Packed head member slot absent or terminal");
+    auto& sequence = *sequences[span.cache_slot];
+    auto output = sequence.StepOutput(); if (!output.ok()) return output.status();
+    for (auto* previous : operation.packed_sequences_) if (previous == &sequence)
+      return Status::InvalidArgument("Packed head sequence aliases");
+    if (!Same(sequence.weight_arena_, *arena) || sequence.config_.config_sha256() != weights.catalog().config_sha256() ||
+        sequence.head_end_ == sequence.start_ || output->tokens != span.token_count || output->start != span.position ||
+        sequence.world_ != x.projection.world_size || sequence.rank_ != x.projection.rank ||
+        sequence.stream_ != x.projection.stream || sequence.communicator_ != communicator ||
+        !Same(sequence.error_, x.projection.error_flag))
+      return Status::InvalidArgument("Packed head member identity or execution geometry differs");
+    const EngramDeviceRegion residual{x.input.collapse.residual.address + span.token_offset * 4ULL * 5120 * 2,
+        span.token_count * 4ULL * 5120 * 2};
+    const EngramDeviceRegion pre{x.input.collapse.pre.address + span.token_offset * 4ULL * 4, span.token_count * 4ULL * 4};
+    if (!Same(residual, output->residual) || !Same(pre, output->pre))
+      return Status::InvalidArgument("Packed head input rows do not match canonical member views");
+    for (const auto retained : sequence.Retained(true)) for (const auto write : writes)
+      if (Overlap(write, retained)) return Status::InvalidArgument("Packed head overwrites retained cache");
+    operation.packed_sequences_.push_back(&sequence); operation.packed_ends_.push_back(sequence.start_);
+  }
+  operation.sequence_ = operation.packed_sequences_.front(); operation.step_end_ = operation.sequence_->start_;
+  operation.logits_ = logits; operation.gathered_logits_ = gathered_logits; operation.world_ = x.projection.world_size;
+  operation.error_ = x.projection.error_flag; operation.stream_ = x.projection.stream;
+  operation.resources_ = resources; operation.deadline_ = deadline;
+  for (auto* member : operation.packed_sequences_) member->active_ = true;
+  const auto launched = LaunchModelHead(x); if (!launched.ok()) return launched;
+  auto submitted = EngramReduction::SubmitGatherFp32(gather, communicator); if (!submitted.ok()) return submitted.status();
+  operation.gather_.emplace(std::move(*submitted)); operation.state_ = HeadOperationState::kWaitingGather;
+  return operation;
+}
 Result<HeadOperationState> HeadOperation::Advance() {
   auto result = AdvanceImpl();
   if (!result.ok() && sequence_) sequence_->Fail();
+  if (!result.ok()) for (auto* member : packed_sequences_) member->Fail();
   return result;
 }
 Result<HeadOperationState> HeadOperation::AdvanceImpl() {
@@ -83,6 +150,11 @@ Result<HeadOperationState> HeadOperation::AdvanceImpl() {
     state_ = previous; return state_;
   }
   if (previous == HeadOperationState::kWaitingGather) {
+    if (!packed_sequences_.empty()) {
+      const auto transposed = LaunchPackedLogitsTranspose({gathered_logits_, logits_, stream_,
+          static_cast<std::uint32_t>(packed_sequences_.size()), world_});
+      if (!transposed.ok()) return transposed;
+    }
     auto completion = EngramCompletion::RecordFlag(error_, stream_, resources_); if (!completion.ok()) return completion.status();
     completion_.emplace(std::move(*completion)); state_ = HeadOperationState::kWaitingCompletion; return state_;
   }
@@ -93,6 +165,7 @@ Result<HeadOperationState> HeadOperation::AdvanceImpl() {
     return Status::FailedPrecondition("Model head communicator changed at completion");
   if (Clock::now() >= deadline_) return Status::DeadlineExceeded("Model head deadline expired at completion");
   sequence_->active_ = false; sequence_->head_end_ = sequence_->start_;
+  for (auto* member : packed_sequences_) { member->active_ = false; member->head_end_ = member->start_; }
   state_ = HeadOperationState::kComplete; return state_;
 }
 Result<EngramDeviceRegion> HeadOperation::Logits() const {
@@ -100,5 +173,14 @@ Result<EngramDeviceRegion> HeadOperation::Logits() const {
       sequence_->input_ready_ || sequence_->layer_ || sequence_->start_ != step_end_ || sequence_->head_end_ != step_end_)
     return Status::FailedPrecondition("Model head logits are incomplete or superseded");
   return logits_;
+}
+Result<EngramDeviceRegion> HeadOperation::PackedLogits(std::uint32_t member) const {
+  if (state_ != HeadOperationState::kComplete || member >= packed_sequences_.size())
+    return Status::FailedPrecondition("Packed head logits not complete or member absent");
+  const auto& sequence = *packed_sequences_[member];
+  if (sequence.failed_ || sequence.active_ || sequence.input_ready_ || sequence.layer_ ||
+      sequence.start_ != packed_ends_[member] || sequence.head_end_ != packed_ends_[member])
+    return Status::FailedPrecondition("Packed head logits superseded by member execution");
+  return EngramDeviceRegion{logits_.address + member * 129280ULL * 4, 129280ULL * 4};
 }
 }  // namespace pih::deepseek_v41

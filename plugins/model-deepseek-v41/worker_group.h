@@ -4,6 +4,7 @@
 #include "rank_channels.h"
 #include "worker_cgroup.h"
 #include "generation_session.h"
+#include "packed_generation_session.h"
 
 namespace pih::deepseek_v41 {
 enum class WorkerGroupState { kEmpty, kConnecting, kReady, kHandedOff, kFailed, kRetiring, kRetired };
@@ -24,8 +25,17 @@ class WorkerGroup final {
   Result<std::unique_ptr<GenerationSession>> StartGeneration(TokenLedger& ledger,
       std::span<const std::uint32_t> prompt, std::span<const std::string_view> token_bytes,
       std::uint64_t first_plan, std::chrono::milliseconds terminate_grace);
+  // Persistent packed execution retains process custody in this group. Caller
+  // must retire the group before destroying session borrowers or cgroups.
+  Result<bool> PollPackedReady();
+  Result<std::unique_ptr<PackedGenerationSession>> StartPackedGeneration(
+      std::uint64_t epoch, std::uint32_t maximum_sequences,
+      std::uint32_t maximum_tokens, std::uint32_t maximum_pending,
+      std::chrono::milliseconds retirement_timeout, std::uint64_t first_plan = 1);
   Status BeginStartupRetirement(Clock::time_point deadline);
   Result<bool> PollStartupRetirement();
+  // Retry the same retained custody with a fresh bounded close-call deadline.
+  Status ResumeStartupRetirement(Clock::time_point deadline);
   WorkerGroupState state() const noexcept { return state_; }
   bool has_startup_custody() const noexcept { return broker_ != nullptr; }
   std::uint32_t spawned_mask() const noexcept;
@@ -46,5 +56,7 @@ class WorkerGroup final {
   SamplingParameters sampling_{};
   std::uint32_t prompt_tokens_ = 0, maximum_positions_ = 0, retirement_ms_ = 0;
   WorkerGroupState state_ = WorkerGroupState::kEmpty;
+  std::uint32_t packed_ready_mask_ = 0;
+  bool packed_handed_off_ = false;
 };
 }  // namespace pih::deepseek_v41

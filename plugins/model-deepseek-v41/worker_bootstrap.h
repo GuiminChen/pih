@@ -8,6 +8,10 @@ struct WorkerBootstrap final {
   static constexpr std::size_t kWireBytes = 2048;
   std::uint32_t supervisor_pid = 0, supervisor_uid = 0, world = 0, rank = 0, device = 0;
   std::uint32_t sm_major = 0, sm_minor = 0, prompt_tokens = 0, maximum_positions = 0, retirement_ms = 0;
+  // Zero token/pending fields retain the scalar sealed v1 envelope. Packed
+  // workers negotiate sealed bootstrap v2 and packed request protocol v1.
+  std::uint32_t maximum_batch_sequences = 1, maximum_batch_tokens = 0, maximum_pending_requests = 0;
+  bool packed_requests = false;
   SamplingIdentity identity;
   SamplingParameters sampling;
   std::uint64_t device_budget = 0, host_budget = 0, staging_bytes = 0;

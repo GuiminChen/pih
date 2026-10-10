@@ -1,6 +1,7 @@
 #pragma once
 #include "rank_channel.h"
 #include "inference_request.h"
+#include "packed_request.h"
 
 namespace pih::deepseek_v41 {
 // Dedicated request endpoint: never attach receipt and request receivers to
@@ -17,6 +18,12 @@ class RankRequestChannel final {
   Status Queue(const InferenceRequest& request);
   Result<bool> PollSend(Clock::time_point deadline);
   Result<std::optional<InferenceRequest>> PollReceive(Clock::time_point deadline);
+  // Use a dedicated endpoint negotiated for packed v1; ordinary and packed
+  // receivers must never consume the same byte stream.
+  Status QueuePacked(const PackedRequest& request);
+  Result<bool> PollSendPacked(Clock::time_point deadline);
+  Result<std::optional<PackedRequest>> PollReceivePacked(Clock::time_point deadline,
+      std::uint32_t maximum_sequences, std::uint32_t maximum_tokens);
   std::uint32_t rank() const noexcept { return endpoint_.rank(); }
   std::uint32_t world() const noexcept { return endpoint_.world(); }
   std::int32_t peer_pid() const noexcept { return endpoint_.peer_pid(); }
@@ -28,5 +35,6 @@ class RankRequestChannel final {
   std::array<std::uint8_t, InferenceRequest::kWireBytes> frame_{};
   std::size_t offset_ = 0;
   bool queued_ = false;
+  std::vector<std::uint8_t> packed_frame_;
 };
 }  // namespace pih::deepseek_v41

@@ -8,16 +8,18 @@ foreach(provider pih.platform.linux pih.backend.nvidia-cuda pih.transport.nccl)
     endif()
 endforeach()
 find_package(ICU REQUIRED COMPONENTS uc i18n)
+find_package(Threads REQUIRED)
 add_library(pih_plugin_model_deepseek_v41 SHARED
     "${PROJECT_SOURCE_DIR}/plugins/model-deepseek-v41/entrypoint.cpp"
     "${PROJECT_SOURCE_DIR}/plugins/model-deepseek-v41/supervisor_execution.cpp"
+    "${PROJECT_SOURCE_DIR}/plugins/model-deepseek-v41/supervisor_batch_execution.cpp"
     "${PROJECT_SOURCE_DIR}/plugins/common/text_json.cpp")
 target_link_libraries(pih_plugin_model_deepseek_v41 PRIVATE PIH::plugin_sdk
     pih_deepseek_v41_supervisor_request pih_deepseek_v41_tokenizer
-    pih_deepseek_v41_rank_channel pih_deepseek_v41_token_ledger pih_core_primitives ICU::uc)
+    pih_deepseek_v41_rank_channel pih_deepseek_v41_token_ledger pih_core_primitives ICU::uc Threads::Threads)
 pih_assert_direct_link_allowlist(pih_plugin_model_deepseek_v41 PIH::plugin_sdk
     pih_deepseek_v41_supervisor_request pih_deepseek_v41_tokenizer
-    pih_deepseek_v41_rank_channel pih_deepseek_v41_token_ledger pih_core_primitives ICU::uc)
+    pih_deepseek_v41_rank_channel pih_deepseek_v41_token_ledger pih_core_primitives ICU::uc Threads::Threads)
 target_link_options(pih_plugin_model_deepseek_v41 PRIVATE "LINKER:-z,defs"
     "LINKER:--version-script=${PROJECT_SOURCE_DIR}/plugins/model-deepseek-v41/exports.map")
 set_property(TARGET pih_plugin_model_deepseek_v41 APPEND PROPERTY LINK_DEPENDS

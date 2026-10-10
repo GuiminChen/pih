@@ -3,6 +3,7 @@ include(GoogleTest)
 
 add_executable(
     pih_core_tests
+    model/qwen_batch_generation_test.cpp
     core/status_test.cpp
     core/sha256_test.cpp
     core/canonical_hash_test.cpp

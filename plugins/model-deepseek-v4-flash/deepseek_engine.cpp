@@ -124,6 +124,14 @@ Status DeepSeekEngine::submit_request(std::uint64_t request_id,
   return Status::Ok();
 }
 
+Status DeepSeekEngine::bind_execution_thread() {
+  for (std::uint32_t rank = 0; rank < world_size(); ++rank) {
+    auto status = resources_->activate_rank_runtime(rank);
+    if (!status.ok()) return status;
+  }
+  return Status::Ok();
+}
+
 Status DeepSeekEngine::cancel_request(std::uint64_t request_id,
                                       std::uint64_t request_generation) {
   // Input PREPARE may have failed before a coordinator/runtime was bound.
@@ -163,6 +171,8 @@ Status DeepSeekEngine::cancel_request(std::uint64_t request_id,
       bound_sampled_token_staged_ = false;
       bound_sampling_config_.reset();
       bound_sampling_.reset();
+    bound_sequence_sampling_configs_.clear();
+    bound_sequence_sampling_.clear();
     }
     current_rank_plan_resources_.clear();
   }
@@ -437,9 +447,18 @@ Status DeepSeekEngine::prepare_production_pipeline(
     std::uint32_t vocabulary_size, bool publish_sampled_token) {
   if (descriptor.engine_epoch != epoch() ||
       request_identities.size() != descriptor.sequence_count ||
-      descriptor.sequence_count != 1 || rank_seeds.size() != world_size()) {
+      descriptor.sequence_count == 0 || descriptor.token_count != descriptor.sequence_count || rank_seeds.size() != world_size()) {
     return Status::InvalidArgument(
         "DeepSeek production pipeline identity is invalid");
+  }
+  for (const auto& seed : rank_seeds) {
+    if (seed.token_ids.size() != descriptor.token_count ||
+        seed.positions.size() != descriptor.token_count ||
+        seed.table_position_count == 0 ||
+        std::any_of(seed.positions.begin(), seed.positions.end(), [&](auto position) {
+          return position >= seed.table_position_count;
+        }))
+      return Status::InvalidArgument("DeepSeek production token/position cardinality invalid");
   }
   const auto admission = admit_request();
   if (!admission.ok()) return admission;
@@ -454,18 +473,22 @@ Status DeepSeekEngine::prepare_production_pipeline(
     if (!initialized.ok())
       return fail(DeepSeekEngineFailure::kWorkerLost, initialized);
   }
+  std::vector<DeepSeekAttentionSequenceBinding> bindings;
+  std::vector<std::optional<DeepSeekRequestSamplingConfig>> sampling_configs;
+  std::vector<std::optional<DeepSeekPreparedSamplingInput>> sampling_inputs;
+  for (std::uint32_t sequence = 0; sequence < descriptor.sequence_count; ++sequence) {
   auto binding = request_attention_binding(
-      request_identities.front().request_id,
-      request_identities.front().request_generation);
+      request_identities[sequence].request_id,
+      request_identities[sequence].request_generation);
   if (!binding.ok()) return binding.status();
   std::optional<DeepSeekPreparedSamplingInput> prepared_sampling;
   auto sampling = control_plane_->sampling_config(
-      request_identities.front().request_id,
-      request_identities.front().request_generation);
+      request_identities[sequence].request_id,
+      request_identities[sequence].request_generation);
   if (sampling.ok() && publish_sampled_token) {
     auto snapshot = control_plane_->accepted_token_snapshot(
-        request_identities.front().request_id,
-        request_identities.front().request_generation);
+        request_identities[sequence].request_id,
+        request_identities[sequence].request_generation);
     if (!snapshot.ok()) return snapshot.status();
     DeepSeekSamplingDescriptor sampling_descriptor{
         sampling->temperature, sampling->top_p, sampling->top_k,
@@ -490,6 +513,10 @@ Status DeepSeekEngine::prepare_production_pipeline(
     prepared_sampling = DeepSeekPreparedSamplingInput{
         sampling->config_id, sampling->mode, sampling_descriptor};
   }
+  bindings.push_back(*binding);
+  sampling_configs.push_back(sampling.ok() && publish_sampled_token ? std::optional<DeepSeekRequestSamplingConfig>(*sampling) : std::nullopt);
+  sampling_inputs.push_back(prepared_sampling);
+  }
   const auto& canonical_tokens = rank_seeds.front().token_ids;
   const auto& canonical_positions = rank_seeds.front().positions;
   const auto canonical_table_positions =
@@ -510,17 +537,22 @@ Status DeepSeekEngine::prepare_production_pipeline(
           "DeepSeek production rank attention state is unavailable");
     }
     rank_seeds[rank].attention_shape_seeds.clear();
+    for (std::uint32_t sequence = 0; sequence < descriptor.sequence_count; ++sequence) {
     for (const auto& layer : state_pool->fixed_layout().descriptors()) {
       DeepSeekAttentionLayerPlanShapeSeed shape;
       shape.layer = layer.layer_id;
       shape.ratio = layer.kind == DeepSeekFixedLayerKind::kRatio4 ? 4U
           : layer.kind == DeepSeekFixedLayerKind::kRatio128 ? 128U : 0U;
       shape.compressed_physical_offset = 128;
-      shape.positions = canonical_positions;
+      shape.positions = {canonical_positions[sequence]};
+      shape.sequence_index = sequence;
       rank_seeds[rank].attention_shape_seeds.push_back(std::move(shape));
     }
-    rank_seeds[rank].attention_binding = *binding;
-    rank_seeds[rank].sampling = prepared_sampling;
+    }
+    rank_seeds[rank].attention_binding = bindings.front();
+    rank_seeds[rank].attention_bindings = bindings;
+    rank_seeds[rank].sampling = sampling_inputs.front();
+    rank_seeds[rank].sequence_sampling = sampling_inputs;
   }
   auto compiler = resources_->assemble_production_deferred_plan_compiler(
       descriptor, std::move(rank_seeds), maximum_sequences, maximum_tokens,
@@ -531,11 +563,10 @@ Status DeepSeekEngine::prepare_production_pipeline(
   if (status.ok()) {
     publish_bound_sampled_token_ = publish_sampled_token;
     bound_sampled_token_staged_ = false;
-    bound_sampling_config_ =
-        sampling.ok() && publish_sampled_token
-            ? std::optional<DeepSeekRequestSamplingConfig>(*sampling)
-            : std::nullopt;
-    bound_sampling_ = prepared_sampling;
+    bound_sequence_sampling_configs_ = std::move(sampling_configs);
+    bound_sequence_sampling_ = std::move(sampling_inputs);
+    bound_sampling_config_ = bound_sequence_sampling_configs_.front();
+    bound_sampling_ = bound_sequence_sampling_.front();
   }
   return status;
 }
@@ -676,16 +707,21 @@ Status DeepSeekEngine::advance_bound_pipeline() {
                       Status::FailedPrecondition(
                           "DeepSeek sampled token owner is unavailable"));
         }
+        std::vector<DeepSeekAcceptedTokenBatch> batches;
+        const auto sequences = current_rank_runtimes_[rank].descriptor().sequence_count;
+        for (std::uint32_t sequence = 0; sequence < sequences; ++sequence) {
+          const auto& sequence_sampling_config = bound_sequence_sampling_configs_.empty() ? bound_sampling_config_ : bound_sequence_sampling_configs_[sequence];
+          const auto& sequence_sampling = bound_sequence_sampling_.empty() ? bound_sampling_ : bound_sequence_sampling_[sequence];
         DeepSeekSamplingResult sampled;
-        if (bound_sampling_config_.has_value()) {
-          auto result = endpoint->sampling_result(
-              bound_sampling_config_->top_logprobs_count);
+        if (sequence_sampling_config.has_value()) {
+          auto result = endpoint->sequence(sequence).sampling_result(
+              sequence_sampling_config->top_logprobs_count);
           if (!result.ok()) {
             return fail(DeepSeekEngineFailure::kWorkerLost, result.status());
           }
           sampled = *result;
         } else {
-          auto token = endpoint->sampled_token();
+          auto token = endpoint->sequence(sequence).sampled_token();
           if (!token.ok()) {
             return fail(DeepSeekEngineFailure::kWorkerLost, token.status());
           }
@@ -697,20 +733,20 @@ Status DeepSeekEngine::advance_bound_pipeline() {
                           "DeepSeek sampled token is outside vocabulary"));
         }
         const auto descriptor = current_rank_runtimes_[rank].descriptor();
-        const bool request_stop = bound_sampling_config_.has_value() &&
-            std::find(bound_sampling_config_->stop_token_ids.begin(),
-                      bound_sampling_config_->stop_token_ids.begin() +
-                          bound_sampling_config_->stop_token_count,
+        const bool request_stop = sequence_sampling_config.has_value() &&
+            std::find(sequence_sampling_config->stop_token_ids.begin(),
+                      sequence_sampling_config->stop_token_ids.begin() +
+                          sequence_sampling_config->stop_token_count,
                       sampled.token_id) !=
-                bound_sampling_config_->stop_token_ids.begin() +
-                    bound_sampling_config_->stop_token_count;
+                sequence_sampling_config->stop_token_ids.begin() +
+                    sequence_sampling_config->stop_token_count;
         const auto finish_reason = sampled.token_id == 1U || request_stop
             ? DeepSeekFinishReason::kStop
             : DeepSeekFinishReason::kNone;
         DeepSeekAcceptedTokenBatch batch{{sampled.token_id}, finish_reason};
-        if (bound_sampling_config_.has_value()) {
+        if (sequence_sampling_config.has_value()) {
           DeepSeekAcceptedTokenBatch::SelectedLogprobReceipt receipt{
-              bound_sampling_config_->config_id, sampled.selected_logprob};
+              sequence_sampling_config->config_id, sampled.selected_logprob};
           receipt.top_logprobs.reserve(sampled.top_token_ids.size());
           for (std::size_t index = 0; index < sampled.top_token_ids.size();
                ++index) {
@@ -720,18 +756,18 @@ Status DeepSeekEngine::advance_bound_pipeline() {
           }
           batch.selected_logprobs.push_back(std::move(receipt));
         }
-        if (bound_sampling_.has_value() &&
-            bound_sampling_->mode == DeepSeekSamplingMode::kStochastic) {
+        if (sequence_sampling.has_value() &&
+            sequence_sampling->mode == DeepSeekSamplingMode::kStochastic) {
           batch.sampling_receipts.push_back({
-              bound_sampling_->config_id,
-              bound_sampling_->descriptor.sample_ordinal,
+              sequence_sampling->config_id,
+              sequence_sampling->descriptor.sample_ordinal,
               sampled.selected_logprob, sampled.rng_word});
         }
+        batches.push_back(std::move(batch));
+      }
         status = control_plane_->stage_accepted_tokens(
-            descriptor.plan_sequence, {std::move(batch)});
-        if (!status.ok()) {
-          return fail(DeepSeekEngineFailure::kWorkerLost, status);
-        }
+            current_rank_runtimes_[rank].descriptor().plan_sequence, std::move(batches));
+        if (!status.ok()) return fail(DeepSeekEngineFailure::kWorkerLost, status);
         bound_sampled_token_staged_ = true;
       }
       status = control_plane_->prepare_stage_complete(rank);
@@ -753,6 +789,8 @@ Status DeepSeekEngine::advance_bound_pipeline() {
     bound_sampled_token_staged_ = false;
     bound_sampling_config_.reset();
     bound_sampling_.reset();
+    bound_sequence_sampling_configs_.clear();
+    bound_sequence_sampling_.clear();
   }
   return Status::Ok();
 }
@@ -839,6 +877,8 @@ void DeepSeekEngine::fail_all() noexcept {
   bound_sampled_token_staged_ = false;
   bound_sampling_config_.reset();
   bound_sampling_.reset();
+    bound_sequence_sampling_configs_.clear();
+    bound_sequence_sampling_.clear();
 }
 
 Status DeepSeekEngine::begin_close() noexcept {
@@ -869,6 +909,8 @@ Status DeepSeekEngine::begin_close() noexcept {
   bound_sampled_token_staged_ = false;
   bound_sampling_config_.reset();
   bound_sampling_.reset();
+    bound_sequence_sampling_configs_.clear();
+    bound_sequence_sampling_.clear();
   state_ = DeepSeekEngineState::kClosing;
   return Status::Ok();
 }
@@ -913,6 +955,8 @@ Status DeepSeekEngine::fail(DeepSeekEngineFailure failure, Status cause) {
     bound_sampled_token_staged_ = false;
     bound_sampling_config_.reset();
     bound_sampling_.reset();
+    bound_sequence_sampling_configs_.clear();
+    bound_sequence_sampling_.clear();
   }
   return cause;
 }

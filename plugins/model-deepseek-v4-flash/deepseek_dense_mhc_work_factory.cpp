@@ -19,7 +19,7 @@ Status append_layers(
   std::array<bool, 43> seen{};
   for (auto& layer : layers) {
     if (layer.layer < owned.first_layer || layer.layer > owned.last_layer ||
-        seen[layer.layer] || layer.sequences.size() != sequence_count) {
+        seen[layer.layer] || (layer.sequences.size() != sequence_count && !(layer.sequences.size() == 1 && layer.sequences.front().packed_tokens))) {
       return Status::InvalidArgument(
           "DeepSeek dense or mHC layer is invalid or duplicated");
     }

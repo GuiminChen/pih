@@ -1,12 +1,16 @@
 # Native DeepSeek V4.1 model implementation
 
 This directory is the native implementation boundary, separate from the vendored
-Python reference. It now includes a serial text inference plugin, authenticated
+Python reference. It now includes a concurrent v3 text inference plugin, authenticated
 supervisor deployment and the SM103 rank-worker path. The independent SM103
 Kernel Pack lives in `plugins/kernels/deepseek-v41-sm103`. These are implemented
 code paths, not a claim of model correctness or B300 hardware qualification.
 Later sections preserve implementation history and may describe earlier stages;
-use `docs/deepseek-v41-b300.md` and the current source for deployment status.
+use [native batching](../../docs/batching.md), `docs/deepseek-v41-b300.md` and the current source for deployment status.
+The text service creates one persistent supervisor child before HTTP threads.
+It schedules canonical packed requests against one rank group with private
+KV/Engram state and shared embedding/FFN/head compute. The scalar CLI remains
+available; new source/object checks are not full CUDA linking or GPU validation.
 
 ## Build ownership
 

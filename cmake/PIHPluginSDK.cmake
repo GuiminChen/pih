@@ -13,6 +13,7 @@ install(FILES
     "${PROJECT_SOURCE_DIR}/include/pih/contracts/engine_v1.h"
     "${PROJECT_SOURCE_DIR}/include/pih/contracts/token_generation_v1.h"
     "${PROJECT_SOURCE_DIR}/include/pih/contracts/text_inference_v2.h"
+    "${PROJECT_SOURCE_DIR}/include/pih/contracts/text_inference_v3.h"
     "${PROJECT_SOURCE_DIR}/include/pih/contracts/qwen_kernels_v1.h"
     "${PROJECT_SOURCE_DIR}/include/pih/contracts/deepseek_kernels_v1.h"
     "${PROJECT_SOURCE_DIR}/include/pih/contracts/deepseek_v41_sm103_kernels_v1.h"

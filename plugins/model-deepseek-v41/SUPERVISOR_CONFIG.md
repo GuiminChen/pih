@@ -7,7 +7,17 @@ hashing an untrusted configuration and treating that as authorization.
 `Parse(bytes, trusted_digest)` applies the same digest/schema checks to a
 caller-owned snapshot. Neither method starts workers or mutates cgroups.
 
-The schema name is `pih.deepseek-v41.supervisor.v1`. All fields below are
+The scalar command retains `pih.deepseek-v41.supervisor.v1`. The persistent
+text service requires `pih.deepseek-v41.supervisor.v2`, with an additional
+`batching` object. Set `maximum_batch_sequences` to 1–32,
+`maximum_batch_tokens` to sequences–4096 and `maximum_pending_requests`
+to 1–4096. Batch size 1 uses the same packed executor. These limits are
+authenticated in the configuration digest and service Lock; increasing them
+also increases private KV/Engram and shared workspace reservations. Admission
+fails when the configured rank device/host budgets cannot reserve the real
+layout. No serial fallback occurs. See [batching](../../docs/batching.md).
+
+All fields below are
 required; unknown/missing/duplicate keys and wrong types are rejected. JSON is
 limited to 2 MiB, depth 8, 4096 nodes and 1 MiB per string. Integer fields are
 nonnegative signed-64-bit JSON integers, with the narrower bounds below.
@@ -15,6 +25,7 @@ nonnegative signed-64-bit JSON integers, with the narrower bounds below.
 | Root field | Required members / meaning |
 | --- | --- |
 | `schema` | Exact schema name above |
+| `batching` (v2) | `maximum_batch_sequences`, `maximum_batch_tokens`, `maximum_pending_requests` |
 | `worker`, `helper` | `path`, `sha256`, `byte_budget` for the rank and NCCL-helper ELF |
 | `library_directories` | Array of at most 16 unique absolute library directories |
 | `cgroup` | `delegated_parent`, `rank_limits`, `helper_limits` |

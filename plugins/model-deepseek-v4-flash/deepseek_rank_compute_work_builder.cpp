@@ -231,8 +231,8 @@ Status DeepSeekRankComputeWorkBuilder::add_decode_attention(
        work.attention.compressed_slot_count != 0 &&
        work.attention.selection.visible_slot_counts.empty()) ||
       !chunk_attention_.empty() ||
-      std::ranges::any_of(decode_attention_, [layer](const auto& item) {
-        return item.layer == layer;
+      std::ranges::any_of(decode_attention_, [layer, &work](const auto& item) {
+        return item.layer == layer && item.work.transaction == work.transaction;
       })) {
     return Status::InvalidArgument(
         "DeepSeek owned decode attention work is invalid or duplicated");
@@ -263,8 +263,8 @@ Status DeepSeekRankComputeWorkBuilder::add_chunk_attention(
        work.submission.attention.compressed_slot_count != 0 &&
        work.submission.attention.selection.visible_slot_counts.empty()) ||
       !decode_attention_.empty() ||
-      std::ranges::any_of(chunk_attention_, [layer](const auto& item) {
-        return item.layer == layer;
+      std::ranges::any_of(chunk_attention_, [layer, &work](const auto& item) {
+        return item.layer == layer && item.work.transaction == work.transaction;
       })) {
     return Status::InvalidArgument(
         "DeepSeek owned chunk attention work is invalid or duplicated");

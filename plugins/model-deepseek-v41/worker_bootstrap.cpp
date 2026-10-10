@@ -29,6 +29,12 @@ bool Path(std::string_view path) {
 constexpr int kSeals = F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL;
 }
 Status WorkerBootstrap::Validate() const {
+  if (!maximum_batch_sequences || maximum_batch_sequences > 32 ||
+      ((packed_requests || maximum_batch_sequences > 1) && (maximum_batch_tokens < maximum_batch_sequences ||
+          maximum_batch_tokens > 4096 || !maximum_pending_requests)) ||
+      (maximum_batch_tokens && (maximum_batch_tokens < maximum_batch_sequences || maximum_batch_tokens > 4096)) ||
+      maximum_pending_requests > 65536)
+    return Status::InvalidArgument("Worker bootstrap packed batch bounds invalid");
   if (!supervisor_pid || supervisor_pid > INT32_MAX || (world != 2 && world != 4 && world != 8) || rank >= world ||
       device > INT32_MAX || sm_major != 10 || sm_minor != 3 || !prompt_tokens || prompt_tokens > 4096 ||
       maximum_positions < prompt_tokens || maximum_positions > FlashConfig::kMaximumPositions ||
@@ -61,7 +67,8 @@ Result<std::array<std::uint8_t, WorkerBootstrap::kWireBytes>> WorkerBootstrap::E
   const auto put = [&](unsigned at, std::uint64_t value, unsigned count) {
     for (unsigned i = 0; i < count; ++i) frame[at + i] = static_cast<std::uint8_t>(value >> (8 * i));
   };
-  put(0, 0x31544f4f42484950ULL, 8); put(8, 1, 4); put(12, kWireBytes, 4); // PIHBOOT1
+  const bool packed_policy = packed_requests || maximum_batch_sequences > 1 || maximum_batch_tokens || maximum_pending_requests;
+  put(0, 0x31544f4f42484950ULL, 8); put(8, packed_policy ? 2 : 1, 4); put(12, kWireBytes, 4); // PIHBOOT1
   unsigned at = 16;
   for (auto value : {supervisor_pid, supervisor_uid, world, rank, device, sm_major, sm_minor, prompt_tokens, maximum_positions, retirement_ms}) {
     put(at, value, 4); at += 4;
@@ -71,6 +78,7 @@ Result<std::array<std::uint8_t, WorkerBootstrap::kWireBytes>> WorkerBootstrap::E
       device_budget, host_budget, staging_bytes, startup_ns, sequence_ns, sampling.seed}) { put(at, value, 8); at += 8; }
   put(128, std::bit_cast<std::uint32_t>(sampling.temperature), 4); put(132, std::bit_cast<std::uint32_t>(sampling.top_p), 4);
   put(136, sampling.top_k, 4); put(140, sampling.logprobs, 4); put(144, sampling.top_count, 4);
+  if (packed_policy) { put(148, maximum_batch_sequences, 4); put(152, maximum_batch_tokens, 4); put(156, maximum_pending_requests, 4); }
   at = 160;
   for (const auto* hash : {&config_sha256, &map_sha256, &weight_manifest_sha256, &plugin_lock_sha256})
     for (const auto b : hash->bytes) frame[at++] = std::to_integer<std::uint8_t>(b);
@@ -81,6 +89,7 @@ Result<std::array<std::uint8_t, WorkerBootstrap::kWireBytes>> WorkerBootstrap::E
   }
   std::copy(artifact_directory.begin(), artifact_directory.end(), frame.begin() + 816);
   std::copy(plugin_lock.begin(), plugin_lock.end(), frame.begin() + 1328);
+  if (packed_policy) put(1840, packed_requests ? 1 : 0, 4);
   return frame;
 }
 Result<WorkerBootstrap> WorkerBootstrap::Decode(std::span<const std::uint8_t> frame) {
@@ -88,7 +97,7 @@ Result<WorkerBootstrap> WorkerBootstrap::Decode(std::span<const std::uint8_t> fr
   const auto get = [&](unsigned at, unsigned count) {
     std::uint64_t value = 0; for (unsigned i = 0; i < count; ++i) value |= std::uint64_t(frame[at + i]) << (8 * i); return value;
   };
-  if (get(0, 8) != 0x31544f4f42484950ULL || get(8, 4) != 1 || get(12, 4) != kWireBytes || get(140, 4) > 1)
+  if (get(0, 8) != 0x31544f4f42484950ULL || (get(8, 4) != 1 && get(8, 4) != 2) || get(12, 4) != kWireBytes || get(140, 4) > 1)
     return Status::InvalidArgument("Worker bootstrap header invalid");
   try {
     WorkerBootstrap out;
@@ -101,6 +110,11 @@ Result<WorkerBootstrap> WorkerBootstrap::Decode(std::span<const std::uint8_t> fr
     out.sampling.temperature = std::bit_cast<float>(static_cast<std::uint32_t>(get(128, 4)));
     out.sampling.top_p = std::bit_cast<float>(static_cast<std::uint32_t>(get(132, 4)));
     out.sampling.top_k = get(136, 4); out.sampling.logprobs = get(140, 4); out.sampling.top_count = get(144, 4);
+    if (get(8, 4) == 2) {
+      if (get(1840, 4) > 1) return Status::InvalidArgument("Worker bootstrap packed protocol flag invalid");
+      out.maximum_batch_sequences = get(148, 4); out.maximum_batch_tokens = get(152, 4); out.maximum_pending_requests = get(156, 4);
+      out.packed_requests = get(1840, 4) != 0;
+    }
     at = 160;
     for (auto* hash : {&out.config_sha256, &out.map_sha256, &out.weight_manifest_sha256, &out.plugin_lock_sha256})
       for (auto& b : hash->bytes) b = static_cast<std::byte>(frame[at++]);

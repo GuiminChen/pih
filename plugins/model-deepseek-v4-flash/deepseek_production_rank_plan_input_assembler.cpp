@@ -24,12 +24,12 @@ DeepSeekProductionRankPlanInputAssembler::Create(
   }
   if (rank >= resources.world_size() || descriptor.engine_epoch == 0 ||
       descriptor.plan_sequence == 0 || descriptor.phase == DeepSeekPlanPhase::kDrain ||
-      descriptor.token_count == 0 || descriptor.sequence_count != 1 ||
+      descriptor.token_count == 0 || descriptor.sequence_count == 0 ||
       seed.token_ids.size() != descriptor.token_count ||
       seed.positions.size() != descriptor.token_count ||
-      !positions_contiguous ||
+      (!positions_contiguous && descriptor.sequence_count == 1) ||
       seed.table_position_count == 0 ||
-      seed.table_position_count <= seed.positions.back()) {
+      seed.table_position_count <= *std::max_element(seed.positions.begin(), seed.positions.end())) {
     return Status::InvalidArgument(
         "DeepSeek production rank plan seed is invalid");
   }
@@ -37,7 +37,7 @@ DeepSeekProductionRankPlanInputAssembler::Create(
     return Status::FailedPrecondition(
         "DeepSeek PP1 input assembler requires the single local rank");
   }
-  if (descriptor.token_count != 1) {
+  if (descriptor.token_count != descriptor.sequence_count) {
     return Status::FailedPrecondition(
         "DeepSeek PP1 recent-KV ring requires sequential single-token plans");
   }
@@ -112,7 +112,7 @@ DeepSeekProductionRankPlanInputAssembler::assemble(
       for (std::size_t token = 0; token < shape.positions.size(); ++token) {
         shape.recent.push_back(
             {shape.layer,
-             layer->sparse_kv_bf16 + token * kLatentRowBytes,
+             layer->sparse_kv_bf16 + (shape.sequence_index + token) * kLatentRowBytes,
              shape.stream, 1, shape.positions[token]});
       }
     }
@@ -121,10 +121,10 @@ DeepSeekProductionRankPlanInputAssembler::assemble(
     if (!attention_weights.ok()) return attention_weights.status();
     auto sparse_status =
         DeepSeekProjectedAttentionShapeAssembler::BindSparseRuntime(
-            shape, layer->sparse_query_bf16, layer->sparse_kv_bf16,
-            layer->sparse_output_bf16,
+            shape, layer->sparse_query_bf16 + shape.sequence_index * 64ULL * 512 * 2, layer->sparse_kv_bf16 + shape.sequence_index * 512ULL * 2,
+            layer->sparse_output_bf16 + shape.sequence_index * 64ULL * 512 * 2,
             attention_weights->attention_sink_f32,
-            attention_resources->device_scratch());
+            attention_resources->device_scratch(shape.sequence_index));
     if (!sparse_status.ok()) return sparse_status;
     if (shape.ratio == 0) continue;
     if (shape.ratio == 4) {
@@ -138,12 +138,12 @@ DeepSeekProductionRankPlanInputAssembler::assemble(
         shape.layer, kind, resources_->rank(rank_).resident_weights());
     if (!weights.ok()) return weights.status();
     auto status = DeepSeekProjectedAttentionShapeAssembler::Populate(
-        shape, layer->mhc_attention.layer_input_bf16,
-        layer->attention_input.q_norm.output_bf16,
-        layer->attention_input.q_rope.positions_u32, *weights,
-        attention_resources->compressor_projection(),
-        attention_resources->device_scratch(),
-        attention_resources->device_scratch().compressor_error_u32(),
+        shape, layer->mhc_attention.layer_input_bf16 + shape.sequence_index * 4096ULL * 2,
+        layer->attention_input.q_norm.output_bf16 + shape.sequence_index * 1024ULL * 2,
+        layer->attention_input.q_rope.positions_u32 + shape.sequence_index * sizeof(std::uint32_t), *weights,
+        attention_resources->compressor_projection(shape.sequence_index),
+        attention_resources->device_scratch(shape.sequence_index),
+        attention_resources->device_scratch(shape.sequence_index).compressor_error_u32(),
         layer->mhc_attention.stream,
         layer->attention_input.q_rope.frequencies_f32,
         seed_.table_position_count);
@@ -171,12 +171,25 @@ DeepSeekProductionRankPlanInputAssembler::assemble(
   const auto final_residual_bf16 = dense->final_residual_bf16;
   const auto stage = bundle->stage();
   std::optional<DeepSeekEndpointStageSequenceWork> endpoint;
+  std::vector<DeepSeekEndpointStageSequenceWork> packed_endpoint;
   if (stage.owns_embedding || stage.owns_lm_head) {
+    if (descriptor_.sequence_count > 1) {
+      for (std::uint32_t sequence = 0; sequence < descriptor_.sequence_count; ++sequence) {
+        auto assembled = resources_->assemble_rank_endpoint_plan_input(
+            rank_, 1, *token_ids_u32 + sequence * sizeof(std::uint32_t),
+            final_residual_bf16 + sequence * 4ULL * 4096 * sizeof(std::uint16_t),
+            seed_.sequence_sampling.empty() ? std::nullopt : seed_.sequence_sampling.at(sequence), sequence);
+        if (!assembled.ok()) return assembled.status();
+        assembled->sequence_index = sequence;
+        packed_endpoint.push_back(std::move(*assembled));
+      }
+    } else {
     auto assembled = resources_->assemble_rank_endpoint_plan_input(
         rank_, descriptor_.token_count, *token_ids_u32,
         final_residual_bf16, seed_.sampling);
     if (!assembled.ok()) return assembled.status();
     endpoint = std::move(*assembled);
+    }
   }
 #if !defined(PIH_DEEPSEEK_DSPARK_DISABLED)
   std::optional<DeepSeekDsparkStageWork> dspark;
@@ -226,6 +239,7 @@ DeepSeekProductionRankPlanInputAssembler::assemble(
   resolved.learned_router = std::move(*learned);
   resolved.dense_mhc = std::move(*dense);
   resolved.endpoint = std::move(endpoint);
+  resolved.packed_endpoint = std::move(packed_endpoint);
 #if !defined(PIH_DEEPSEEK_DSPARK_DISABLED)
   resolved.dspark = std::move(dspark);
   resolved.dspark_mtp = std::move(dspark_mtp);
@@ -258,7 +272,9 @@ AssembleSchedulerAttentionShapes(
         : DeepSeekOwnedAttentionLayerPlanInput::AssembleChunk(
               std::move(shape));
     if (!assembled.ok()) return assembled.status();
-    owned->push_back(std::move(*assembled));
+    auto value = std::move(*assembled);
+    value.set_sequence_index(shape.sequence_index);
+    owned->push_back(std::move(value));
   }
   for (const auto& layer : *owned) {
     if (descriptor.phase == DeepSeekPlanPhase::kDecode) {
@@ -289,14 +305,14 @@ DeepSeekProductionRankPlanInputAssembler::PublishResolved(
       descriptor.phase == DeepSeekPlanPhase::kPrefill;
 #endif
   bool input_incomplete =
-      descriptor.token_count == 0 || descriptor.sequence_count != 1 ||
+      descriptor.token_count == 0 || descriptor.sequence_count == 0 ||
       seed.token_ids.size() != descriptor.token_count ||
       seed.positions.size() != descriptor.token_count ||
       resolved.attention_state_pool == nullptr ||
       resolved.request_input_lease.owner == nullptr ||
       resolved.request_input_lease.token_count != descriptor.token_count ||
       resolved.dense_mhc.layers.empty() ||
-      endpoint_required != resolved.endpoint.has_value();
+      endpoint_required != (resolved.endpoint.has_value() || !resolved.packed_endpoint.empty());
 #if !defined(PIH_DEEPSEEK_DSPARK_DISABLED)
   input_incomplete = input_incomplete ||
       dspark_required != resolved.dspark.has_value() ||
@@ -319,7 +335,7 @@ DeepSeekProductionRankPlanInputAssembler::PublishResolved(
   input.chunk_attention = std::move(seed.chunk_attention);
   input.dense_mhc_layers = std::move(resolved.dense_mhc.layers);
   input.attention_state_pool = resolved.attention_state_pool;
-  input.attention_bindings = {seed.attention_binding};
+  input.attention_bindings = seed.attention_bindings.empty() ? std::vector<DeepSeekAttentionSequenceBinding>{seed.attention_binding} : std::move(seed.attention_bindings);
   input.lifetime_backings.push_back(
       std::move(resolved.request_input_lease.owner));
   for (auto& backing : resolved.additional_lifetime_backings) {
@@ -329,6 +345,7 @@ DeepSeekProductionRankPlanInputAssembler::PublishResolved(
     }
     input.lifetime_backings.push_back(std::move(backing));
   }
+  input.endpoint = std::move(resolved.packed_endpoint);
   if (resolved.endpoint.has_value()) {
     input.endpoint.push_back(std::move(*resolved.endpoint));
   }

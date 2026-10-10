@@ -60,6 +60,14 @@ template<class V> void Fields(V& v, CompressorProjectionLaunch& x) { v(x.input, 
 template<class V> void Fields(V& v, CompressedKvLaunch& x) { v(x.kv, x.cache, x.error_flag, x.stream, x.rows, x.first_slot, x.capacity); }
 template<class V> void Fields(V& v, WindowKvLaunch& x) { v(x.kv, x.ring, x.error_flag, x.stream, x.start, x.tokens); }
 template<class V> void Fields(V& v, HeadProjectionLaunch& x) { v(x.input, x.weight, x.output, x.error_flag, x.stream, x.world_size, x.rank); }
+struct PackedHeadLaunch { HeadProjectionLaunch projection; };
+template<class V> void Fields(V& v, PackedHeadLaunch& x) {
+  auto& p = x.projection;
+  Fields(v, p); v(p.row_indices, p.sequences, p.input_rows);
+}
+template<class V> void Fields(V& v, PackedLogitsTransposeLaunch& x) {
+  v(x.rank_major, x.sequence_major, x.stream, x.sequences, x.world_size);
+}
 template<class V> void Fields(V& v, TokenEmbeddingLaunch& x) { v(x.ids, x.weight, x.hidden, x.residual, x.pre, x.error_flag, x.stream, x.tokens, x.world_size, x.rank); }
 template<class V> void Fields(V& v, RouterLaunch& x) { v(x.input, x.weight, x.bias, x.image_bias, x.image_mask, x.logits, x.indices, x.route_weights, x.error_flag, x.stream, x.tokens, x.layer); }
 template<class V> void Fields(V& v, SamplingParameters& x) { v(x.temperature, x.top_p, x.top_k, x.seed, x.ordinal, x.logprobs, x.top_count, x.suppressed_count, x.suppressed); }
@@ -103,4 +111,3 @@ struct Decoder {
   }
 };
 }  // namespace pih::deepseek_v41::kernel_wire
-

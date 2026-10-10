@@ -35,6 +35,7 @@ struct DeepSeekAttentionLayerPlanShapeSeed final {
   std::uintptr_t main_cos_sin_cache_f32 = 0;
   std::uintptr_t index_cos_sin_cache_f32 = 0;
   float rms_epsilon = 0.0F;
+  std::uint32_t sequence_index = 0;
 };
 
 class DeepSeekOwnedAttentionLayerPlanInput final {
@@ -60,6 +61,10 @@ class DeepSeekOwnedAttentionLayerPlanInput final {
     return chunk_;
   }
   [[nodiscard]] bool is_decode() const noexcept { return decode_mode_; }
+  void set_sequence_index(std::uint32_t index) noexcept {
+    decode_.sequence_index = index;
+    chunk_.sequence_index = index;
+  }
 
  private:
   DeepSeekOwnedAttentionLayerPlanInput() = default;

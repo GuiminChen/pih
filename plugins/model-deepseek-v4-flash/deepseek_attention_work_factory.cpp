@@ -7,23 +7,24 @@ template <typename Input, typename Append>
 Status append_exact(
     DeepSeekStageRange owned,
     const std::array<
-        std::optional<DeepSeekAttentionLayerRuntimeResources>, 43>& resources,
+        std::vector<DeepSeekAttentionLayerRuntimeResources>, 43>& resources,
     std::vector<Input> layers, Append append) {
   const auto expected = owned.last_layer - owned.first_layer + 1;
-  if (layers.size() != expected) {
+  if (layers.empty() || layers.size() % expected != 0) {
     return Status::InvalidArgument(
         "DeepSeek attention plan does not cover every owned layer");
   }
-  std::array<bool, 43> seen{};
+  std::array<std::vector<bool>, 43> seen{};
+  for (auto& covered : seen) covered.resize(layers.size() / expected);
   for (auto& layer : layers) {
     if (layer.layer < owned.first_layer || layer.layer > owned.last_layer ||
-        seen[layer.layer] || !resources[layer.layer].has_value() ||
+        layer.sequence_index >= seen[layer.layer].size() || seen[layer.layer][layer.sequence_index] || layer.sequence_index >= resources[layer.layer].size() ||
         layer.transaction == nullptr) {
       return Status::InvalidArgument(
           "DeepSeek attention plan layer is foreign or duplicated");
     }
-    seen[layer.layer] = true;
-    const auto status = append(*resources[layer.layer], std::move(layer));
+    seen[layer.layer][layer.sequence_index] = true;
+    const auto status = append(resources[layer.layer][layer.sequence_index], std::move(layer));
     if (!status.ok()) return status;
   }
   return Status::Ok();
@@ -37,16 +38,17 @@ DeepSeekAttentionWorkFactory::Create(
     std::vector<DeepSeekAttentionLayerRuntimeResources> layers) {
   if (owned_layers.first_layer > owned_layers.last_layer ||
       owned_layers.last_layer > 42 ||
-      layers.size() != owned_layers.last_layer - owned_layers.first_layer + 1) {
+      layers.empty() || layers.size() % (owned_layers.last_layer - owned_layers.first_layer + 1) != 0) {
     return Status::InvalidArgument(
         "DeepSeek attention runtime layer coverage is invalid");
   }
   DeepSeekAttentionWorkFactory result;
   result.owned_layers_ = owned_layers;
-  std::array<bool, 43> seen{};
+  std::array<std::vector<bool>, 43> seen{};
+  for (auto& covered : seen) covered.resize(layers.size() / (owned_layers.last_layer - owned_layers.first_layer + 1));
   for (auto& layer : layers) {
     if (layer.layer < owned_layers.first_layer ||
-        layer.layer > owned_layers.last_layer || seen[layer.layer] ||
+        layer.layer > owned_layers.last_layer || layer.sequence_index >= seen[layer.layer].size() || seen[layer.layer][layer.sequence_index] ||
         layer.recent_writer == nullptr ||
         layer.update_coordinator == nullptr ||
         layer.attention_coordinator == nullptr ||
@@ -54,8 +56,9 @@ DeepSeekAttentionWorkFactory::Create(
       return Status::InvalidArgument(
           "DeepSeek attention runtime resource is incomplete or duplicated");
     }
-    seen[layer.layer] = true;
-    result.layers_[layer.layer] = layer;
+    seen[layer.layer][layer.sequence_index] = true;
+    if (result.layers_[layer.layer].empty()) result.layers_[layer.layer].resize(seen[layer.layer].size());
+    result.layers_[layer.layer][layer.sequence_index] = layer;
   }
   return result;
 }

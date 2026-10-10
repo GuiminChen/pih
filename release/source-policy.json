@@ -27,6 +27,8 @@
     "python/pih_client/*.py",
     "tests/tools/*.py",
     "tests/native/CMakeLists.txt",
+    "tests/native/*.cpp",
+    "tests/native/*.h",
     "tests/cpp/CMakeLists.txt",
     "tests/cpp/**/*.cpp",
     "tests/cpp/**/*.h",

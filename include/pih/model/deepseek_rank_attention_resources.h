@@ -18,7 +18,8 @@ class DeepSeekRankAttentionResources final {
       DeepSeekAttentionRuntimeOperations operations,
       RegisteredPinnedAllocator& pinned_allocator,
       Allocator& device_allocator, std::uintptr_t completion_event,
-      std::uint64_t context_identity, std::int32_t device_ordinal);
+      std::uint64_t context_identity, std::int32_t device_ordinal,
+      std::uint32_t maximum_sequences = 1);
 
   DeepSeekRankAttentionResources(
       const DeepSeekRankAttentionResources&) = delete;
@@ -34,8 +35,21 @@ class DeepSeekRankAttentionResources final {
   }
   [[nodiscard]] DeepSeekAttentionDeviceScratchResources& device_scratch()
       noexcept { return *device_scratch_; }
+  [[nodiscard]] DeepSeekAttentionDeviceScratchResources& device_scratch(
+      std::uint32_t sequence_index) noexcept {
+    return sequence_index == 0 ? *device_scratch_
+        : additional_lanes_.at(sequence_index - 1)->device_scratch();
+  }
   [[nodiscard]] DeepSeekCompressorProjectionDeviceResources&
   compressor_projection() noexcept { return *compressor_projection_; }
+  [[nodiscard]] DeepSeekCompressorProjectionDeviceResources& compressor_projection(
+      std::uint32_t sequence_index) noexcept {
+    return sequence_index == 0 ? *compressor_projection_
+        : additional_lanes_.at(sequence_index - 1)->compressor_projection();
+  }
+  [[nodiscard]] std::uint32_t maximum_sequences() const noexcept {
+    return static_cast<std::uint32_t>(additional_lanes_.size() + 1);
+  }
   [[nodiscard]] std::uint32_t maximum_queries() const noexcept {
     return host_staging_->maximum_queries();
   }
@@ -59,6 +73,7 @@ class DeepSeekRankAttentionResources final {
   std::unique_ptr<DeepSeekCompressorProjectionDeviceResources>
       compressor_projection_;
   std::unique_ptr<DeepSeekAttentionRuntimeResources> runtime_;
+  std::vector<std::unique_ptr<DeepSeekRankAttentionResources>> additional_lanes_;
   std::unique_ptr<DeepSeekAttentionWorkFactory> work_factory_;
 };
 

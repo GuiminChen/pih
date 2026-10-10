@@ -1,5 +1,5 @@
 #include "pih/plugin_sdk/abi.h"
-#include "pih/contracts/text_inference_v2.h"
+#include "pih/contracts/text_inference_v3.h"
 #include "pih/core/bounded_json.h"
 #include "../surface-openai-http/http_request_framing.h"
 #include <arpa/inet.h>
@@ -15,18 +15,21 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <atomic>
+#include "../common/bounded_workers.h"
 
 namespace {
 namespace http = pih::surface_openai_http;
-volatile std::sig_atomic_t stopping = 0;
-void StopSignal(int) { stopping = 1; }
+static_assert(std::atomic<bool>::is_always_lock_free);
+std::atomic<bool> stopping{false};
+void StopSignal(int) { stopping.store(true, std::memory_order_relaxed); }
 struct Descriptor {
   int value{-1};
   explicit Descriptor(int fd) : value(fd) {}
   Descriptor(const Descriptor&) = delete;
   ~Descriptor() { if (value >= 0) ::close(value); }
 };
-struct State { const pih_host_api_v1* host{}; const pih_text_inference_api_v2* engine{}; uint32_t phase{}; } state;
+struct State { const pih_host_api_v1* host{}; const pih_text_inference_api_v3* engine{}; uint32_t phase{}; } state;
 pih_status_v1 Status(uint32_t code, const char* text = "") {
   pih_status_v1 value{}; value.struct_size = sizeof(value); value.abi_version = PIH_STATUS_ABI_VERSION_V1;
   value.code = code; std::strncpy(value.message, text, sizeof(value.message) - 1); return value;
@@ -195,7 +198,7 @@ void Connection(int fd) {
   std::vector<char> response(8 * 1024 * 1024); uint64_t size = 0;
   Output output{fd};
   OutputScope output_scope(output);
-  const pih_text_output_sink_v2 sink{sizeof(sink), PIH_TEXT_INFERENCE_ABI_V2,
+  const pih_text_output_sink_v3 sink{sizeof(sink), PIH_TEXT_INFERENCE_ABI_V3,
       &output, StartOutput, WriteOutput, Cancelled};
   const auto status = state.engine->complete(state.engine->context,
       request.request.endpoint == http::Endpoint::kChatCompletions ? 1 : 0,
@@ -230,6 +233,9 @@ void Connection(int fd) {
   if (status.code == PIH_STATUS_UNAVAILABLE_V1) {
     error_reply(503, "{\"error\":\"generation_unavailable\"}"); return;
   }
+  if (status.code == PIH_STATUS_RESOURCE_EXHAUSTED_V1) {
+    error_reply(429, "{\"error\":\"request_capacity_exhausted\"}"); return;
+  }
   if (status.code == PIH_STATUS_INVALID_ARGUMENT_V1) {
     error_reply(400, "{\"error\":{\"message\":\"invalid or unsupported request; check the selected model's documented fields and sampling limits\"}}"); return;
   }
@@ -261,8 +267,16 @@ pih_status_v1 Serve(void* context, uint16_t port) noexcept {
     if (::bind(socket.value, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || ::listen(socket.value, 16) != 0)
       throw std::runtime_error("listen_bind_failed");
     stopping = 0; SignalScope signals;
+    const auto capacity = state.engine->maximum_concurrent_requests(state.engine->context);
+    if (!capacity || capacity > 8192) throw std::runtime_error("engine_admission_bound_invalid");
+    pih::plugin_runtime::BoundedWorkers workers(capacity);
+    struct StopWorkers {
+      pih::plugin_runtime::BoundedWorkers& workers;
+      ~StopWorkers() { stopping = true; workers.Join(); }
+    } stop_workers{workers};
     std::cout << "{\"state\":\"serving\",\"host\":\"127.0.0.1\",\"port\":" << port << ",\"backend\":\"native-plugin\"}" << std::endl;
     while (!stopping) {
+      if (workers.failed()) { stopping = true; break; }
       const auto ready = Wait(socket.value, POLLIN,
           std::chrono::steady_clock::now() + std::chrono::seconds(1));
       if (ready == WaitResult::kStopped) break;
@@ -273,21 +287,33 @@ pih_status_v1 Serve(void* context, uint16_t port) noexcept {
         if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
         throw std::runtime_error("accept_failed");
       }
-      Connection(connection.value);
+      // Process-custody providers with capacity 1 execute on the serving thread.
+      if (capacity == 1) { Connection(connection.value); continue; }
+      const int fd = connection.value;
+      if (workers.TryStart([fd] { Descriptor owned(fd); Connection(owned.value); })) {
+        connection.value = -1;
+      } else {
+        // A saturated service must not block the admission loop on a slow peer.
+        constexpr char busy[] = "HTTP/1.1 503 Error\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 22\r\n\r\n{\"error\":\"queue_full\"}";
+        (void)::send(fd, busy, sizeof(busy)-1, MSG_NOSIGNAL | MSG_DONTWAIT);
+      }
     }
+    stopping = true;
+    workers.Join();
+    if (workers.failed()) throw std::runtime_error("engine_execution_failed");
     return Status(PIH_STATUS_OK_V1);
   } catch (const std::exception& error) { return Status(PIH_STATUS_INTERNAL_V1, error.what()); }
   catch (...) { return Status(PIH_STATUS_INTERNAL_V1, "native_service_failed"); }
 }
-pih_text_service_api_v2 api{sizeof(api), PIH_TEXT_INFERENCE_ABI_V2, &state, Serve};
+pih_text_service_api_v3 api{sizeof(api), PIH_TEXT_INFERENCE_ABI_V3, &state, Serve};
 pih_status_v1 Advance(void* c, uint32_t expected) noexcept {
   if (c != &state || state.phase != expected) return Status(PIH_STATUS_FAILED_PRECONDITION_V1);
   ++state.phase; return Status(PIH_STATUS_OK_V1);
 }
 pih_status_v1 Register(void* c) noexcept {
   if (c != &state || state.phase != 0) return Status(PIH_STATUS_FAILED_PRECONDITION_V1);
-  pih_capability_v1 capability{sizeof(capability), PIH_CAPABILITY_ABI_VERSION_V1, "surface.text-http.v2",
-    "pih.surface.text-http.v2", &api, PIH_CAPABILITY_THREADING_SERIALIZED_V1, PIH_CAPABILITY_SCOPE_ACTIVATION_V1,
+  pih_capability_v1 capability{sizeof(capability), PIH_CAPABILITY_ABI_VERSION_V1, "surface.text-http.v3",
+    "pih.surface.text-http.v3", &api, PIH_CAPABILITY_THREADING_SERIALIZED_V1, PIH_CAPABILITY_SCOPE_ACTIVATION_V1,
     PIH_CAPABILITY_CARDINALITY_EXACTLY_ONE_V1};
   auto result = state.host->register_capability(state.host->context, &capability);
   if (!pih_status_is_valid_v1(&result)) return Status(PIH_STATUS_INTERNAL_V1);
@@ -296,12 +322,13 @@ pih_status_v1 Register(void* c) noexcept {
 pih_status_v1 Configure(void* c) noexcept {
   if (c != &state || state.phase != 1) return Status(PIH_STATUS_FAILED_PRECONDITION_V1);
   const void* resolved = nullptr;
-  const auto status = state.host->resolve_capability(state.host->context, "inference.text.v2", "pih.inference.text.v2",
+  const auto status = state.host->resolve_capability(state.host->context, "inference.text.v3", "pih.inference.text.v3",
       PIH_CAPABILITY_SCOPE_ACTIVATION_V1, PIH_CAPABILITY_CARDINALITY_EXACTLY_ONE_V1, &resolved);
   if (!pih_status_is_ok_v1(&status) || !resolved) return Status(PIH_STATUS_FAILED_PRECONDITION_V1, "text_engine_missing");
-  auto* engine = static_cast<const pih_text_inference_api_v2*>(resolved);
-  if (engine->struct_size != sizeof(*engine) || engine->contract_version != PIH_TEXT_INFERENCE_ABI_V2 ||
-      !engine->context || !engine->model_id || !engine->complete || !engine->load || !engine->close)
+  auto* engine = static_cast<const pih_text_inference_api_v3*>(resolved);
+  if (engine->struct_size != sizeof(*engine) || engine->contract_version != PIH_TEXT_INFERENCE_ABI_V3 ||
+      !engine->context || !engine->model_id || !engine->complete || !engine->load || !engine->close ||
+      !engine->maximum_concurrent_requests)
     return Status(PIH_STATUS_FAILED_PRECONDITION_V1, "text_engine_contract_invalid");
   // Only printable model IDs may be included in HTTP JSON without escaping.
   size_t count = 0;

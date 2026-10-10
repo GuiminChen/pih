@@ -37,7 +37,7 @@ Result<DeepSeekRankComputePlanWork> DeepSeekRankPlanCompiler::compile(
     const DeepSeekPipelinePlanDescriptor& descriptor,
     DeepSeekRankPlanCompilerInput input) {
   if (descriptor.engine_epoch == 0 || descriptor.plan_sequence == 0 ||
-      descriptor.token_count == 0 || descriptor.sequence_count != 1 ||
+      descriptor.token_count == 0 || descriptor.sequence_count == 0 ||
       descriptor.phase == DeepSeekPlanPhase::kDrain ||
       input.token_ids.size() != descriptor.token_count ||
       input.attention_state_pool == nullptr ||
@@ -75,29 +75,37 @@ Result<DeepSeekRankComputePlanWork> DeepSeekRankPlanCompiler::compile(
     input.dense_attention = std::move(dense->dense_attention);
     input.mhc_attention = std::move(dense->mhc_attention);
     input.mhc_feed_forward = std::move(dense->mhc_feed_forward);
+    if (descriptor.sequence_count > 1) {
+      for (auto& layer : input.dense_attention) layer.sequences.front().packed_tokens = true;
+      for (auto& layer : input.mhc_attention) layer.sequences.front().packed_tokens = true;
+      for (auto& layer : input.mhc_feed_forward) layer.sequences.front().packed_tokens = true;
+    }
   }
-  const auto rebind = [&](DeepSeekAttentionSequenceTransaction*& transaction) {
-    transaction = plan_transaction;
+  const auto rebind = [&](DeepSeekAttentionSequenceTransaction*& transaction,
+                          std::uint32_t sequence_index = 0) {
+    if (sequence_index >= transactions->size())
+      return Status::InvalidArgument("DeepSeek sequence index exceeds packed plan");
+    transaction = (*transactions)[sequence_index].get();
     return Status::Ok();
   };
   for (auto& layer : input.decode_attention) {
-    auto status = rebind(layer.transaction);
+    auto status = rebind(layer.transaction, layer.sequence_index);
     if (!status.ok()) return status;
   }
   for (auto& layer : input.chunk_attention) {
-    auto status = rebind(layer.transaction);
+    auto status = rebind(layer.transaction, layer.sequence_index);
     if (!status.ok()) return status;
   }
   for (auto& layer : input.dense_attention) {
     for (auto& sequence : layer.sequences) {
-      auto status = rebind(sequence.transaction);
+      auto status = rebind(sequence.transaction, sequence.sequence_index);
       if (!status.ok()) return status;
     }
   }
   const auto rebind_mhc = [&](auto& layers) -> Status {
     for (auto& layer : layers) {
       for (auto& sequence : layer.sequences) {
-        auto status = rebind(sequence.transaction);
+        auto status = rebind(sequence.transaction, sequence.sequence_index);
         if (!status.ok()) return status;
       }
     }
@@ -108,7 +116,7 @@ Result<DeepSeekRankComputePlanWork> DeepSeekRankPlanCompiler::compile(
   status = rebind_mhc(input.mhc_feed_forward);
   if (!status.ok()) return status;
   for (auto& sequence : input.endpoint) {
-    status = rebind(sequence.transaction);
+    status = rebind(sequence.transaction, sequence.sequence_index);
     if (!status.ok()) return status;
   }
 #if !defined(PIH_DEEPSEEK_DSPARK_DISABLED)

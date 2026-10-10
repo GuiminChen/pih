@@ -17,11 +17,17 @@ class EmbeddingOperation final {
   static Result<EmbeddingOperation> Start(BlockSequence& sequence, TokenEmbeddingLaunch launch, const BackboneWeightUpload& weights,
       EngramHashState& hashes, std::span<const std::uint32_t> tokens, const TokenInputUploadLaunch& upload,
       std::uintptr_t communicator, const EngramCompletionResources& resources, Clock::time_point deadline);
+  static Result<EmbeddingOperation> StartPacked(const PackedRequest& plan,
+      std::span<BlockSequence* const> sequences, std::span<EngramHashState* const> hashes,
+      TokenEmbeddingLaunch launch, const BackboneWeightUpload& weights, const TokenInputUploadLaunch& upload,
+      std::uintptr_t communicator, const EngramCompletionResources& resources, Clock::time_point deadline);
   Result<EmbeddingState> Advance();
  private:
   EmbeddingOperation() = default;
   Result<EmbeddingState> AdvanceImpl();
   BlockSequence* sequence_ = nullptr;
+  std::vector<BlockSequence*> packed_sequences_;
+  std::vector<PackedRequestSpan> packed_spans_;
   TokenEmbeddingLaunch launch_{};
   TokenInputUploadLaunch upload_{};
   std::uintptr_t communicator_ = 0;

@@ -12,7 +12,7 @@
 #include "indexer_plan.h"
 
 namespace pih::deepseek_v41 {
-enum class BlockOperationState { kWaitingEngram, kWaitingSources, kWaitingBlock, kComplete, kFailed };
+enum class BlockOperationState { kWaitingEngram, kWaitingSources, kSourcesReady, kWaitingBlock, kComplete, kFailed };
 // Backbone layer from admitted residual/cache inputs and step phases to FFN residual.
 // Hash admission and weight loading remain upstream responsibilities.
 // All device resources/provider/sequence lifetimes borrowed.
@@ -35,8 +35,13 @@ class BlockOperation final {
       const CompressorPlan& compressor_plan, EngramDeviceRegion compressor_arena,
       const IndexerPlan& indexer_plan, EngramDeviceRegion indexer_arena,
       EngramDeviceRegion host_counts, std::uintptr_t communicator,
-      const EngramCompletionResources& resources, Clock::time_point deadline);
+      const EngramCompletionResources& resources, Clock::time_point deadline,
+      bool defer_block = false, std::uint64_t shared_reservation = 0);
   Result<BlockOperationState> Advance();
+  Result<PreparedBlockLaunch> PreparedLaunch() const;
+  // Called only after the shared packed attention/FFN completion fence. These
+  // rows become this member's next-layer residual and carried mHC coefficients.
+  Status CompletePacked(const PreparedBlockOperation& completed, EngramDeviceRegion residual, EngramDeviceRegion pre);
  private:
   BlockOperation() = default;
   Status StartSources();
@@ -57,5 +62,6 @@ class BlockOperation final {
   std::optional<EngramTensorParallel> engram_;
   std::optional<PreparedBlockOperation> block_;
   BlockOperationState state_ = BlockOperationState::kFailed;
+  bool defer_block_{};
 };
 }  // namespace pih::deepseek_v41

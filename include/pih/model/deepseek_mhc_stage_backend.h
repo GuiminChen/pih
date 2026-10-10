@@ -12,6 +12,8 @@ struct DeepSeekMhcStageSequenceWork final {
   DeepSeekMhcSequenceExecutor* executor = nullptr;
   DeepSeekAttentionSequenceTransaction* transaction = nullptr;
   DeepSeekMhcSequenceSubmission submission;
+  std::uint32_t sequence_index = 0;
+  bool packed_tokens = false;
 };
 
 class DeepSeekMhcStageWorkProvider {

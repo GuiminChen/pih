@@ -15,7 +15,7 @@ bool same_descriptor(const DeepSeekPipelinePlanDescriptor& a,
 Status validate_layer(
     const DeepSeekBoundDenseAttentionLayerWork& layer,
     const DeepSeekPipelinePlanDescriptor& descriptor) {
-  if (layer.sequences.size() != descriptor.sequence_count) {
+  if ((layer.sequences.size() != descriptor.sequence_count && !(layer.sequences.size() == 1 && layer.sequences.front().packed_tokens))) {
     return Status::InvalidArgument(
         "DeepSeek dense attention packed sequence count is invalid");
   }

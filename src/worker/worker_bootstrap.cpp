@@ -30,7 +30,7 @@
 #include "microkernel/plugin_loader.h"
 #include "microkernel/plugin_registry.h"
 #include "pih/contracts/engine_v1.h"
-#include "pih/contracts/text_inference_v2.h"
+#include "pih/contracts/text_inference_v3.h"
 #include "pih/contracts/token_generation_v1.h"
 #include "pih/contracts/health_v1.h"
 #include "pih/contracts/openai_http_v1.h"
@@ -427,7 +427,7 @@ int RunDevelopmentLock(const std::string& lock_path, std::uint16_t serve_port,
     const std::vector<std::uint32_t>& prompt_tokens,
     std::uint32_t maximum_completion_tokens) {
   auto lock = LoadDevelopmentLock(lock_path);
-  const bool text_service = lock.has_engine && lock.engine.contract_id == "pih.inference.text.v2";
+  const bool text_service = lock.has_engine && lock.engine.contract_id == "pih.inference.text.v3";
   // The lock selects a provider, not an arbitrary callback-table layout.
   if (lock.has_engine && !text_service && lock.engine.contract_id != "pih.engine.v1")
     throw std::invalid_argument("worker_engine_contract_unsupported");
@@ -592,24 +592,25 @@ int RunDevelopmentLock(const std::string& lock_path, std::uint16_t serve_port,
     return 0;
   }
   if (text_service) {
-    const pih_text_inference_api_v2* engine = nullptr;
+    const pih_text_inference_api_v3* engine = nullptr;
     std::exception_ptr failure;
     try {
-      const auto* candidate = static_cast<const pih_text_inference_api_v2*>(bindings.ResolveApi(
+      const auto* candidate = static_cast<const pih_text_inference_api_v3*>(bindings.ResolveApi(
           lock.engine.capability_id, lock.engine.contract_id, PIH_CAPABILITY_SCOPE_ACTIVATION_V1,
           PIH_CAPABILITY_CARDINALITY_EXACTLY_ONE_V1));
       if (!candidate || candidate->struct_size != sizeof(*candidate) ||
-          candidate->contract_version != PIH_TEXT_INFERENCE_ABI_V2 ||
-          !candidate->context || !candidate->load || !candidate->complete || !candidate->close) {
+          candidate->contract_version != PIH_TEXT_INFERENCE_ABI_V3 ||
+          !candidate->context || !candidate->load || !candidate->complete || !candidate->close ||
+          !candidate->maximum_concurrent_requests) {
         throw std::runtime_error("native_text_engine_contract_invalid");
       }
       // Only a validated callback table may enter the cleanup path. Surface
       // resolution can throw, including before any load has been attempted.
       engine = candidate;
-      const auto* service = static_cast<const pih_text_service_api_v2*>(bindings.ResolveApi(
-          "surface.text-http.v2", "pih.surface.text-http.v2", PIH_CAPABILITY_SCOPE_ACTIVATION_V1,
+      const auto* service = static_cast<const pih_text_service_api_v3*>(bindings.ResolveApi(
+          "surface.text-http.v3", "pih.surface.text-http.v3", PIH_CAPABILITY_SCOPE_ACTIVATION_V1,
           PIH_CAPABILITY_CARDINALITY_EXACTLY_ONE_V1));
-      if (!service || service->struct_size != sizeof(*service) || service->contract_version != PIH_TEXT_INFERENCE_ABI_V2 ||
+      if (!service || service->struct_size != sizeof(*service) || service->contract_version != PIH_TEXT_INFERENCE_ABI_V3 ||
           !service->context || !service->serve) throw std::runtime_error("native_text_surface_contract_invalid");
       CloseCapabilityResolution(contexts, authority_mutex);
       auto status = engine->load(engine->context, lock.engine.configuration_json.data(), lock.engine.configuration_json.size());

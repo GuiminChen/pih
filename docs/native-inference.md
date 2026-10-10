@@ -62,7 +62,7 @@ bash deploy/run-v41-native.sh build-service /absolute/build-dir /absolute/new-bu
 bash deploy/run-v41-native.sh seal-rank /absolute/new-bundle
 ```
 
-Prepare an authenticated `pih.deepseek-v41.supervisor.v1` configuration using
+Prepare an authenticated `pih.deepseek-v41.supervisor.v2` configuration using
 the exact paths and SHA-256 values of that bundle's worker, helper and
 `v41-rank.lock`, the B300 rank placements, delegated cgroup parent and external
 verified model generation. The complete field and admission rules are in
@@ -133,13 +133,13 @@ been compiled or executed on Linux/CUDA and makes no numerical correctness claim
 V4.1 has a separate frozen-HF-config parser, native model plugin, SM103 Kernel
 Pack, rank worker and supervisor in `plugins/model-deepseek-v41` and
 `plugins/kernels/deepseek-v41-sm103`. It rejects V4-0731 configuration and
-registers `inference.text.v2` only in a sealed V4.1 bundle. The code path still
+registers `inference.text.v3` only in a sealed V4.1 bundle. The code path still
 requires Linux/CUDA linking, runtime integration and model qualification;
 source compilation alone is not proof that B300 inference runs correctly.
 
 ## DeepSeek V4-0731 native text service
 
-The model plugin now exposes `inference.text.v2`, consuming authenticated
+The model plugin now exposes `inference.text.v3`, consuming authenticated
 semantic bytes and the existing native PP1 engine. The deployment command loads
 only native providers and `pih.surface.text-http`, not the diagnostic HTTP
 surface or a Python model backend. On Linux RTX 4090 D with CUDA, ICU and
@@ -212,7 +212,7 @@ Both chat and `/v1/completions` support `max_tokens`, temperature 0–2, top_p
 requires top_p=1. Raw completions take a string `prompt` without chat framing;
 EOS is omitted from raw returned text. Prompt plus output must fit the sealed
 context (this development launcher caps it at 4096, not a qualified capacity).
-Requests are serialized on loopback, without TLS/auth. The configured deadline defaults to 10 minutes;
+Requests use bounded concurrency on loopback, without TLS/auth. The configured deadline defaults to 10 minutes;
 interruption drains the current committed device plan for up to another five
 minutes before retirement. This is cooperative, not CUDA preemption. Cleaned-up
 timeouts return 504; malformed generated structure or failed cleanup terminates
@@ -447,7 +447,7 @@ Discovery requests (`GET /health`, `GET /readyz`, `GET /v1/models`) require
 a nonempty Host. They reject payloads, transfer encoding, duplicate headers and
 already-received pipelined bytes. Content-Length may be absent or exactly `0`.
 They use the same header validation as inference requests, not a GPU self-test.
-The current serialized service cannot answer health checks independently while
+The batched service admits health checks independently while
 generation is running; a 200 response does not qualify model output.
 
 Framing failures return specific HTTP statuses: 404 for unknown endpoints, 405
@@ -950,7 +950,7 @@ the answer is not generated in full before splitting it. The terminal chunk
 contains finish reason and usage, followed by `[DONE]`. Errors after headers use
 an SSE `error` JSON and close without `[DONE]`; pre-stream invalid requests get
 HTTP 400. A 30-second socket write timeout cancels slow consumers and drains the
-request rather than retaining unbounded output. The native text contract is v2;
+request rather than retaining unbounded output. The native text contract is v3;
 rebuild Worker, model, Surface, SDK and Lock together. No v1 compatibility bridge.
 
 Output callback violations are terminal: duplicate starts, invalid stream modes,
@@ -979,3 +979,5 @@ archive, not invoked through an old Python engine. Repository-wide migration is
 still unfinished: V4-0731 weight preparation/qualification, V4.1/SM103 Linux
 link and runtime validation, multi-GPU transport pluginization, and remaining
 development tools. Compatibility bridges are not substitutes.
+
+See [native batching](batching.md) for configuration, concurrent calls and current verification limits. Current-source CUDA compilation and production cross-linking passed; Linux service execution and GPU qualification remain unverified.

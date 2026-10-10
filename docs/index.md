@@ -14,3 +14,5 @@ Start with [development](development.md) to build the native worker. Continue wi
 - [DeepSeek V4.1 Flash / B300 onboarding](deepseek-v41-b300.md)
 
 This preview exercises native composition. There is no qualified model/GPU profile and no general-purpose `pih serve` command yet. The Python wheel contains only an HTTP client and host diagnostics, not the native bundle or an old inference compatibility layer.
+
+- [Native multi-sequence batching](batching.md)

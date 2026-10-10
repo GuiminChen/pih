@@ -164,13 +164,15 @@ NvidiaQwen3Bf16Engine::LoadPinnedSnapshot(
     std::span<const std::byte> artifact_bytes,
     std::string_view config_json,
     Sha256Digest expected_artifact_digest,
-    std::uint32_t provider_prepared_sm) {
+    std::uint32_t provider_prepared_sm, std::uint32_t maximum_batch_sequences,
+      std::uint32_t maximum_batch_tokens) {
   if (artifact_bytes.empty() || config_json.empty() || expected_artifact_digest == Sha256Digest{} ||
-      (provider_prepared_sm != 89 && provider_prepared_sm != 90))
+      (provider_prepared_sm != 89 && provider_prepared_sm != 90) ||
+      maximum_batch_sequences < 1 || maximum_batch_sequences > 32 || maximum_batch_tokens < maximum_batch_sequences || maximum_batch_tokens > 4096)
     return Status::InvalidArgument("Qwen BF16 authenticated snapshot invalid");
   return LoadImpl(memory, resources, async, cubin_root,
                   device_ordinal, expected_artifact_digest,
-                  artifact_bytes, config_json, provider_prepared_sm);
+                  artifact_bytes, config_json, provider_prepared_sm, maximum_batch_sequences, maximum_batch_tokens);
 }
 
 Result<std::unique_ptr<NvidiaQwen3Bf16Engine>>
@@ -183,9 +185,11 @@ NvidiaQwen3Bf16Engine::LoadImpl(
     Sha256Digest expected_artifact_digest,
     std::span<const std::byte> artifact_bytes,
     std::string_view config_json,
-    std::uint32_t provider_prepared_sm) {
+    std::uint32_t provider_prepared_sm, std::uint32_t maximum_batch_sequences,
+      std::uint32_t maximum_batch_tokens) {
   if (device_ordinal < 0 || cubin_root.empty() ||
-      (provider_prepared_sm != 89 && provider_prepared_sm != 90)) {
+      (provider_prepared_sm != 89 && provider_prepared_sm != 90) ||
+      maximum_batch_sequences < 1 || maximum_batch_sequences > 32 || maximum_batch_tokens < maximum_batch_sequences || maximum_batch_tokens > 4096) {
     return Status::InvalidArgument("Qwen engine load identity is invalid");
   }
   if (!qwen_plugin::ValidMemoryApi(memory) || !qwen_plugin::ValidResourceApi(resources) || !qwen_plugin::ValidAsyncApi(async))
@@ -380,14 +384,12 @@ NvidiaQwen3Bf16Engine::LoadImpl(
   auto resource_hash = packed_resource_vector_hash(*state->plan);
   if (!resource_hash.ok()) return resource_hash.status();
   auto controller = qwen_plugin::ControllerClient::CreateBound(
-      {1, kMaximumBatchSequences,
+      {1, maximum_batch_sequences,
        {{64, 128},
-        {kMaximumBatchSequences, kMaximumSequenceTokens,
-         kMaximumSequenceTokens}},
-       {kMaximumBatchSequences, kMaximumBatchSequences,
-        kMaximumStepTokens, kMaximumBatchSequences, 8, 5'000'000},
+        {maximum_batch_sequences, kMaximumSequenceTokens, kMaximumSequenceTokens}},
+       {maximum_batch_sequences, maximum_batch_sequences, maximum_batch_tokens, maximum_batch_sequences, 8, 5'000'000},
        {kMaximumBatchSequences, kMaximumStepTokens},
-       kMaximumStepTokens, true, "qwen3-bf16-packed-v1", *resource_hash,
+       maximum_batch_tokens, true, "qwen3-bf16-packed-v1", *resource_hash,
        static_cast<std::uint32_t>(state->config.eos_token_id)});
   if (!controller.ok()) return controller.status();
   state->controller.emplace(std::move(*controller));
@@ -451,6 +453,11 @@ Result<std::uint64_t> NvidiaQwen3Bf16Engine::submit_packed(
   return generation;
 }
 
+Status NvidiaQwen3Bf16Engine::bind_packed_thread() {
+  if (!state_ || !state_->runtime || !state_->runtime_driver)
+    return Status::FailedPrecondition("Qwen packed runtime context missing");
+  return state_->runtime_driver->bind_runtime(state_->rank, state_->runtime->identity().context);
+}
 Status NvidiaQwen3Bf16Engine::cancel_packed(
     std::uint64_t request_generation) {
   if (!state_ || state_->poisoned.load()) {

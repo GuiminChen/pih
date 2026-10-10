@@ -26,8 +26,11 @@ class BlockSequence final {
  private:
   friend class BlockOperation;
   friend class BackboneOperation;
+  friend class PackedBackboneOperation;
   friend class InferenceOperation;
+  friend class PackedInferenceOperation;
   friend class RankWorkerLoop;
+  friend class PackedRankWorkerLoop;
   friend class HeadOperation;
   friend class SamplingOperation;
   friend class EmbeddingOperation;

@@ -14,6 +14,7 @@ struct DeepSeekAttentionLayerRuntimeResources final {
   DeepSeekCompressedLayerUpdateCoordinator* update_coordinator = nullptr;
   DeepSeekAttentionLayerCoordinator* attention_coordinator = nullptr;
   DeepSeekPrefillLayerCoordinator* prefill_coordinator = nullptr;
+  std::uint32_t sequence_index = 0;
 };
 
 struct DeepSeekDecodeAttentionLayerPlanInput final {
@@ -22,12 +23,14 @@ struct DeepSeekDecodeAttentionLayerPlanInput final {
   DeepSeekCompressedLayerUpdateSubmission update;
   DeepSeekAttentionLayerSubmission attention;
   DeepSeekAttentionSequenceTransaction* transaction = nullptr;
+  std::uint32_t sequence_index = 0;
 };
 
 struct DeepSeekChunkAttentionLayerPlanInput final {
   std::uint32_t layer = 0;
   DeepSeekPrefillLayerSubmission submission;
   DeepSeekAttentionSequenceTransaction* transaction = nullptr;
+  std::uint32_t sequence_index = 0;
 };
 
 class DeepSeekAttentionWorkFactory final {
@@ -48,7 +51,7 @@ class DeepSeekAttentionWorkFactory final {
 
  private:
   DeepSeekStageRange owned_layers_;
-  std::array<std::optional<DeepSeekAttentionLayerRuntimeResources>, 43>
+  std::array<std::vector<DeepSeekAttentionLayerRuntimeResources>, 43>
       layers_;
 };
 

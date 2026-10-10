@@ -17,6 +17,8 @@ def test_source_policy_preserves_native_sources_excludes_reference_and_private_h
     assert "src/worker/main.cpp" in names
     assert "plugins/model-qwen3/qwen_cubin_identity.h" in names
     assert "plugins/common/DEEPSEEK_LICENSE" in names
+    for source in (ROOT / "tests/native").glob("*.cpp"):
+        assert source.relative_to(ROOT).as_posix() in names
     assert not any(p.startswith(("out/", "python/pih/", "plugins/model-deepseek-v41-reference/",
                                  "docs/superpowers/", "docs/implementation/")) for p in names)
 

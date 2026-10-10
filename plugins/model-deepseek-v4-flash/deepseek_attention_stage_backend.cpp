@@ -41,26 +41,14 @@ Status DeepSeekAttentionStageOperatorBackend::launch(
       (plan.phase == DeepSeekPlanPhase::kPrefill ||
        plan.phase == DeepSeekPlanPhase::kVerify) &&
       chunk_provider_ != nullptr) {
-    auto resolved = chunk_provider_->resolve(command.layer, plan);
-    if (!resolved.ok() || *resolved == nullptr) {
-      return poison(resolved.ok()
-                        ? Status::FailedPrecondition(
-                              "DeepSeek chunk attention work is unavailable")
-                        : resolved.status());
-    }
-    const auto* chunk = *resolved;
-    if (chunk->chunk_coordinator == nullptr ||
-        chunk->attention_coordinator == nullptr ||
-        chunk->transaction == nullptr) {
-      return poison(Status::FailedPrecondition(
-          "DeepSeek chunk attention work is incomplete"));
-    }
-    auto status = chunk->chunk_coordinator->launch(
-        chunk->submission, *chunk->transaction);
-    if (!status.ok()) return poison(status);
-    active_coordinator_ = chunk->attention_coordinator;
+    auto resolved = chunk_provider_->resolve_batch(command.layer, plan);
+    if (!resolved.ok() || resolved->empty())
+      return poison(resolved.ok() ? Status::FailedPrecondition("DeepSeek packed prefill work missing") : resolved.status());
+    chunk_batch_ = *resolved;
+    decode_batch_ = {};
+    sequence_cursor_ = 0;
     mode_ = Mode::kAttention;
-    return Status::Ok();
+    return launch_sequence();
   }
   if (command.kind != DeepSeekStageOperatorKind::kAttention ||
       plan.phase != DeepSeekPlanPhase::kDecode) {
@@ -69,28 +57,35 @@ Status DeepSeekAttentionStageOperatorBackend::launch(
     mode_ = Mode::kFallback;
     return Status::Ok();
   }
-  auto resolved = provider_->resolve(command.layer, plan);
-  if (!resolved.ok() || *resolved == nullptr) {
-    return poison(resolved.ok()
-                      ? Status::FailedPrecondition(
-                            "DeepSeek decode attention work is unavailable")
-                      : resolved.status());
-  }
-  work_ = *resolved;
-  if (work_->recent_writer == nullptr || work_->update_coordinator == nullptr ||
-      work_->coordinator == nullptr || work_->transaction == nullptr) {
-    return poison(Status::FailedPrecondition(
-        "DeepSeek decode attention work is incomplete"));
-  }
-  auto status = work_->coordinator->begin_decode(
-      work_->recent, work_->update, work_->attention, *work_->recent_writer,
-      *work_->update_coordinator, *work_->transaction);
-  if (!status.ok()) return poison(status);
-  active_coordinator_ = work_->coordinator;
+  auto resolved = provider_->resolve_batch(command.layer, plan);
+  if (!resolved.ok() || resolved->empty())
+    return poison(resolved.ok() ? Status::FailedPrecondition("DeepSeek packed decode work missing") : resolved.status());
+  decode_batch_ = *resolved;
+  chunk_batch_ = {};
+  sequence_cursor_ = 0;
   mode_ = Mode::kAttention;
-  return Status::Ok();
+  return launch_sequence();
 }
 
+Status DeepSeekAttentionStageOperatorBackend::launch_sequence() {
+  if (!chunk_batch_.empty()) {
+    const auto& chunk = chunk_batch_[sequence_cursor_];
+    if (!chunk.chunk_coordinator || !chunk.attention_coordinator || !chunk.transaction)
+      return poison(Status::FailedPrecondition("DeepSeek packed prefill resources incomplete"));
+    auto status = chunk.chunk_coordinator->launch(chunk.submission, *chunk.transaction);
+    if (!status.ok()) return poison(status);
+    active_coordinator_ = chunk.attention_coordinator;
+  } else {
+    work_ = &decode_batch_[sequence_cursor_];
+    if (!work_->recent_writer || !work_->update_coordinator || !work_->coordinator || !work_->transaction)
+      return poison(Status::FailedPrecondition("DeepSeek packed decode resources incomplete"));
+    auto status = work_->coordinator->begin_decode(work_->recent, work_->update,
+        work_->attention, *work_->recent_writer, *work_->update_coordinator, *work_->transaction);
+    if (!status.ok()) return poison(status);
+    active_coordinator_ = work_->coordinator;
+  }
+  return Status::Ok();
+}
 Result<DeepSeekStageComputeStatus>
 DeepSeekAttentionStageOperatorBackend::poll() {
   if (mode_ == Mode::kIdle || mode_ == Mode::kPoisoned) {
@@ -136,6 +131,13 @@ DeepSeekAttentionStageOperatorBackend::poll() {
       return poison(Status::Internal(
           "DeepSeek attention coordinator entered an invalid stage state"));
   }
+  if (++sequence_cursor_ < (chunk_batch_.empty() ? decode_batch_.size() : chunk_batch_.size())) {
+    auto status = launch_sequence();
+    if (!status.ok()) return status;
+    return DeepSeekStageComputeStatus::kInProgress;
+  }
+  decode_batch_ = {};
+  chunk_batch_ = {};
   work_ = nullptr;
   active_coordinator_ = nullptr;
   mode_ = Mode::kIdle;

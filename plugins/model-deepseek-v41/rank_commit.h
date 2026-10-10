@@ -17,8 +17,10 @@ class RankStepReceipt final {
   std::array<std::uint8_t, 256> Encode() const noexcept;
  private:
   friend class InferenceOperation;
+  friend class PackedInferenceOperation;
   friend class RankCommitGate;
   friend class RankWorkerLoop;
+  friend class PackedRankWorkerLoop;
   friend class RankReceiptChannel;
   RankStepReceipt() = default;
   SamplingIdentity identity_{};

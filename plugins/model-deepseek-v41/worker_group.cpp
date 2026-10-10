@@ -163,6 +163,19 @@ std::uint32_t WorkerGroup::spawned_mask() const noexcept {
   for (unsigned i = 0; i < world_; ++i) if (workers_[i].binding().pid > 0) mask |= 1U << i;
   return mask;
 }
+Result<bool> WorkerGroup::PollPackedReady() {
+  if (state_ != WorkerGroupState::kReady)
+    return Status::FailedPrecondition("Packed worker group is not connected");
+  if (Clock::now() >= deadline_) return Status::DeadlineExceeded("Packed worker ready barrier expired");
+  const auto live = processes_->CheckLive(); if (!live.ok()) return live;
+  for (unsigned rank = 0; rank < world_; ++rank) {
+    if (packed_ready_mask_ & (1U << rank)) continue;
+    auto ready = notices_[rank]->PollReceive(RankLifecycleKind::kReady, identity_, deadline_);
+    if (!ready.ok()) return ready.status();
+    if (*ready) packed_ready_mask_ |= 1U << rank;
+  }
+  return packed_ready_mask_ == (1U << world_) - 1U;
+}
 std::uint32_t WorkerGroup::reaped_mask() const noexcept {
   std::uint32_t mask = processes_ ? processes_->reaped_mask() : 0;
   for (unsigned i = 0; i < world_; ++i) if (workers_[i].state() == WorkerSpawnState::kReaped) mask |= 1U << i;
@@ -173,6 +186,17 @@ Status WorkerGroup::BeginStartupRetirement(Clock::time_point deadline) {
       state_ == WorkerGroupState::kRetired || state_ == WorkerGroupState::kRetiring || deadline <= Clock::now())
     return Status::FailedPrecondition("Worker group startup retirement not permitted");
   deadline_ = deadline; state_ = WorkerGroupState::kRetiring;
+  return Status::Ok();
+}
+Status WorkerGroup::ResumeStartupRetirement(Clock::time_point deadline) {
+  if (state_ != WorkerGroupState::kRetiring || deadline <= Clock::now() ||
+      deadline - Clock::now() > std::chrono::minutes(5))
+    return Status::FailedPrecondition("Worker group retained retirement retry invalid");
+  if (broker_ && broker_->state() == NcclBrokerState::kRetiring) {
+    const auto resumed = broker_->ResumeRetirement(deadline);
+    if (!resumed.ok()) return resumed;
+  }
+  deadline_ = deadline;
   return Status::Ok();
 }
 Result<bool> WorkerGroup::PollStartupRetirement() {

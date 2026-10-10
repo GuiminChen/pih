@@ -1,6 +1,14 @@
 # Native integration status
 English | [中文](integration-status.zh.md)
 
+The native batching revision (text ABI v3, persistent multi-request owners and
+packed V4.1 kernels) was rebuilt from current source on 2026-10-09. All four
+production CMake profiles compiled CUDA machine code, completed final linking
+and installed fresh bundles; 62 ELF/device products passed inspection. CPU
+batching acceptance passed 10/10 targets. The evidence below applies to this
+revision; it does not claim Linux service execution or GPU qualification.
+See [batching status and hardware commands](batching.md).
+
 This delivery separates code/build acceptance from hardware qualification.
 The production matrix covers Qwen3-0.6B on RTX 4090 D (SM89) and H100 PCIe
 (SM90), DeepSeek V4-0731 on RTX 4090 D PP1 (SM89), and DeepSeek V4.1 text

@@ -109,5 +109,30 @@ TEST(DeepSeekBoundAttentionWorkProviderTest,
   EXPECT_FALSE(DeepSeekBoundChunkAttentionWorkProvider::Create({43, 43}).ok());
 }
 
+TEST(DeepSeekBoundAttentionWorkProviderTest,
+     PackedDecodeKeepsIndependentTransactionsAndPositions) {
+  auto provider = DeepSeekBoundDecodeAttentionWorkProvider::Create({5, 6});
+  ASSERT_TRUE(provider.ok());
+  const std::array<std::uint32_t, 1> first{{10}}, second{{43}};
+  const std::array<DeepSeekBoundDecodeAttentionLayerWork, 4> layers{{
+      {5, decode_work(1, first)}, {5, decode_work(2, second)},
+      {6, decode_work(3, first)}, {6, decode_work(4, second)}}};
+  const DeepSeekPipelinePlanDescriptor descriptor{
+      7, 9, DeepSeekPlanPhase::kDecode, 2, 2};
+  ASSERT_TRUE(provider->bind(descriptor, layers).ok());
+  auto batch = provider->resolve_batch(5, descriptor);
+  ASSERT_TRUE(batch.ok());
+  ASSERT_EQ(batch->size(), 2U);
+  EXPECT_EQ((*batch)[0].attention.query_positions.front(), 10U);
+  EXPECT_EQ((*batch)[1].attention.query_positions.front(), 43U);
+  EXPECT_NE((*batch)[0].transaction, (*batch)[1].transaction);
+  auto invalid = layers;
+  invalid[1].work.transaction = invalid[0].work.transaction;
+  auto next = descriptor;
+  ++next.plan_sequence;
+  EXPECT_FALSE(provider->bind(next, invalid).ok());
+  EXPECT_TRUE(provider->resolve_batch(5, descriptor).ok());
+}
+
 }  // namespace
 }  // namespace pih

@@ -292,7 +292,7 @@ DeepSeekEngineResources::assemble_production_deferred_plan_compiler(
   if (rank_seeds.size() != world_size() ||
       descriptor.engine_epoch != epoch() || descriptor.plan_sequence == 0 ||
       descriptor.phase == DeepSeekPlanPhase::kDrain ||
-      descriptor.token_count == 0 || descriptor.sequence_count != 1) {
+      descriptor.token_count == 0 || descriptor.sequence_count == 0) {
     return Status::InvalidArgument(
         "DeepSeek production deferred compiler request is invalid");
   }
@@ -484,7 +484,8 @@ Result<DeepSeekEndpointStageSequenceWork>
 DeepSeekEngineResources::assemble_rank_endpoint_plan_input(
     std::uint32_t rank, std::uint32_t token_count,
     std::uintptr_t token_ids_u32, std::uintptr_t final_hc_bf16,
-    std::optional<DeepSeekPreparedSamplingInput> sampling) {
+    std::optional<DeepSeekPreparedSamplingInput> sampling,
+    std::uint32_t sequence_index) {
   if (rank >= ranks_.size() || runtime_owners_.size() != ranks_.size() ||
       runtime_owners_[rank] == nullptr) {
     return Status::InvalidArgument(
@@ -502,9 +503,12 @@ DeepSeekEngineResources::assemble_rank_endpoint_plan_input(
   auto weights = DeepSeekEndpointWeightBindings::Resolve(
       bundle->stage(), ranks_[rank].resident_weights());
   if (!weights.ok()) return weights.status();
+  if (sequence_index >= runtime->maximum_sequences())
+    return Status::InvalidArgument("DeepSeek endpoint sequence lane unavailable");
+  auto view = device->view(sequence_index);
   return DeepSeekEndpointPlanInputAssembler::Assemble(
       bundle->stage(), token_count, token_ids_u32, final_hc_bf16,
-      *weights, device->view(), runtime->executor(), stream,
+      *weights, view, runtime->sequence(sequence_index).executor(), stream,
       device->maximum_tokens(), std::move(sampling));
 }
 

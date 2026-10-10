@@ -1,5 +1,6 @@
 #include "worker_artifacts.h"
 #include "worker_runtime.h"
+#include "packed_worker_runtime.h"
 #include "worker_communicator.h"
 #include "rank_channels.h"
 #include "worker/worker_bootstrap.h"
@@ -83,16 +84,23 @@ int main(int argc, char**) {
     auto artifacts = Take(WorkerArtifacts::Open(bootstrap));
     // Reserve the complete payload budget before any backend allocation.
     auto device_budget = bootstrap.device_budget;
-    const auto prefill = Take(ExpertWorkspaceBytes(bootstrap.prompt_tokens));
-    const auto decode = Take(ExpertWorkspaceBytes(1));
+    const auto prefill = Take(ExpertWorkspaceBytes(bootstrap.packed_requests ? bootstrap.maximum_batch_tokens : bootstrap.prompt_tokens));
+    const auto decode = Take(ExpertWorkspaceBytes(bootstrap.packed_requests ? bootstrap.maximum_batch_sequences : 1));
     for (const auto bytes : {artifacts->weights().catalog().device_bytes(), prefill, decode}) {
       if (bytes > device_budget) throw std::runtime_error("rank_device_budget_exceeded");
       device_budget -= bytes;
     }
     stage = "memory-plan";
-    auto plan = Take(InferenceMemoryPlan::Create(artifacts->config(), bootstrap.prompt_tokens,
-        bootstrap.maximum_positions, bootstrap.world, bootstrap.rank, device_budget,
-        bootstrap.host_budget - bootstrap.staging_bytes));
+    std::optional<InferenceMemoryPlan> plan;
+    std::optional<PackedInferenceMemoryPlan> packed_plan;
+    if (bootstrap.packed_requests)
+      packed_plan.emplace(Take(PackedInferenceMemoryPlan::Create(artifacts->config(), bootstrap.maximum_batch_tokens,
+          bootstrap.maximum_batch_sequences, bootstrap.maximum_positions, bootstrap.world, bootstrap.rank,
+          device_budget, bootstrap.host_budget - bootstrap.staging_bytes)));
+    else
+      plan.emplace(Take(InferenceMemoryPlan::Create(artifacts->config(), bootstrap.prompt_tokens,
+          bootstrap.maximum_positions, bootstrap.world, bootstrap.rank, device_budget,
+          bootstrap.host_budget - bootstrap.staging_bytes)));
 
     stage = "plugins";
     pih::worker::WorkerPluginStack plugins;
@@ -137,10 +145,7 @@ int main(int argc, char**) {
     if (!pih_status_is_ok_v1(&admitted_device)) throw std::runtime_error("rank_b300_identity_mismatch");
 
     stage = "runtime";
-    {
-      WorkerRuntime runtime(artifacts->config(), artifacts->weights(), plan, device, resources, memory, async,
-          static_cast<std::int32_t>(bootstrap.device), artifacts->hashes(), endpoints.requests, endpoints.receipts,
-          endpoints.commands, endpoints.notices);
+    const auto run = [&](auto& runtime, auto released) {
       try {
         // Keep runtime/artifacts/channels alive until process termination on any
         // active-stage failure. An outer catch alone runs their destructors first,
@@ -150,10 +155,21 @@ int main(int argc, char**) {
           bootstrap.sampling, startup, sequence, std::chrono::milliseconds(bootstrap.retirement_ms)));
         volatile std::byte* id = bootstrap.nccl_id.data();
         for (std::size_t i = 0; i < bootstrap.nccl_id.size(); ++i) id[i] = std::byte{};
-        while (Take(runtime.Poll()) != WorkerRuntimeState::kReleased) Yield();
+        while (Take(runtime.Poll()) != released) Yield();
       } catch (...) {
         FailStop(stage);
       }
+    };
+    if (bootstrap.packed_requests) {
+      PackedWorkerRuntime runtime(artifacts->config(), artifacts->weights(), *packed_plan, device, resources, memory, async,
+          static_cast<std::int32_t>(bootstrap.device), artifacts->hashes(), endpoints.requests, endpoints.receipts,
+          endpoints.commands, endpoints.notices);
+      run(runtime, PackedWorkerRuntimeState::kReleased);
+    } else {
+      WorkerRuntime runtime(artifacts->config(), artifacts->weights(), *plan, device, resources, memory, async,
+          static_cast<std::int32_t>(bootstrap.device), artifacts->hashes(), endpoints.requests, endpoints.receipts,
+          endpoints.commands, endpoints.notices);
+      run(runtime, WorkerRuntimeState::kReleased);
     }
     stage = "plugin-shutdown";
     UnbindSm103Kernels();

@@ -36,4 +36,21 @@ class SequenceCachePlan final {
   std::uint64_t bytes_ = 0;
   std::uint32_t maximum_positions_ = 0;
 };
+// One allocation reserves independent persistent state for every admitted slot.
+// Reusing a retired slot still requires a fresh BlockSequence/EngramHashState.
+class PackedSequenceCachePlan final {
+ public:
+  static Result<PackedSequenceCachePlan> Create(const FlashConfig& config,
+      std::uint32_t maximum_positions, std::uint32_t maximum_sequences, std::uint64_t byte_budget);
+  std::uint64_t bytes() const noexcept { return sequence_.bytes() * sequences_; }
+  std::uint32_t maximum_sequences() const noexcept { return sequences_; }
+  const SequenceCachePlan& sequence_plan() const noexcept { return sequence_; }
+  Result<EngramDeviceRegion> SequenceArena(EngramDeviceRegion arena, std::uint32_t slot) const;
+  Result<LayerCacheRegions> Bind(EngramDeviceRegion arena, std::uint32_t slot, std::uint32_t layer) const;
+ private:
+  PackedSequenceCachePlan(SequenceCachePlan sequence, std::uint32_t sequences)
+      : sequence_(std::move(sequence)), sequences_(sequences) {}
+  SequenceCachePlan sequence_;
+  std::uint32_t sequences_;
+};
 }  // namespace pih::deepseek_v41

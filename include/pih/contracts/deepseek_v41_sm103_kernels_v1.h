@@ -54,6 +54,8 @@ enum pih_v41_kernel_operation_v1 {
   PIH_V41_PROMOTEATTENTIONOUTPUT_V1 = 38,
   PIH_V41_ROUNDATTENTIONOUTPUT_V1 = 39,
   PIH_V41_MHCINITIALPRE_V1 = 40,
+  PIH_V41_PACKEDHEADPROJECTION_V1 = 41,
+  PIH_V41_PACKEDLOGITSTRANSPOSE_V1 = 42,
 };
 typedef struct pih_v41_kernel_command_v1 {
   uint32_t struct_size, abi_version, operation, word_count;

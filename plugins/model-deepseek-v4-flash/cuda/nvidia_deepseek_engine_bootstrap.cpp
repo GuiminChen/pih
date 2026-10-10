@@ -198,7 +198,7 @@ Result<std::unique_ptr<DeepSeekEngine>> BuildCore(
     return Status::FailedPrecondition(
         "DeepSeek host-spill budget differs from rank resources");
   }
-  
+
   const auto stable_authority = [&]() {
     {
       return catalog.poll_leases();
@@ -311,13 +311,16 @@ Result<std::unique_ptr<DeepSeekEngine>> BuildCore(
         runtime_view->fixed_state_operations(),
         runtime_view->identity().context, config.device_ordinals()[rank]);
     if (!attention_state.ok()) return attention_state.status();
+    // A plan contains one current token per sequence. Keep each sparse lane
+    // to one query: multiplying the sealed packed token budget by the sequence
+    // count would reserve unused quadratic staging and scratch storage.
     auto attention = DeepSeekRankAttentionResources::Allocate(
-        stage.layers, capacity.max_pipeline_tokens,
+        stage.layers, 1,
         attention_state->ratio4_page_pairs_per_sequence(),
         attention_state->fixed_layout(), attention_state->page_arena(),
         runtime_view->attention_operations(), *pinned, **allocator,
         runtime_view->identity().event, runtime_view->identity().context,
-        config.device_ordinals()[rank]);
+        config.device_ordinals()[rank], capacity.max_sequences);
     if (!attention.ok()) return attention.status();
     auto learned_router_device =
         DeepSeekLearnedRouterDeviceResources::Allocate(
@@ -334,11 +337,11 @@ Result<std::unique_ptr<DeepSeekEngine>> BuildCore(
     if (!learned_router_staging.ok()) return learned_router_staging.status();
     auto endpoint = DeepSeekEndpointRuntimeResources::Allocate(
         pipeline.rank(rank), runtime_view->endpoint_operations(),
-        *pinned);
+        *pinned, capacity.max_sequences);
     if (!endpoint.ok()) return endpoint.status();
     auto endpoint_device = DeepSeekEndpointDeviceResources::Allocate(
-        pipeline.rank(rank), capacity.max_pipeline_tokens, **allocator,
-        runtime_view->identity().context, config.device_ordinals()[rank]);
+        pipeline.rank(rank), capacity.max_sequences, **allocator,
+        runtime_view->identity().context, config.device_ordinals()[rank], capacity.max_sequences);
     if (!endpoint_device.ok()) return endpoint_device.status();
 #if !defined(PIH_DEEPSEEK_DSPARK_DISABLED)
     std::unique_ptr<DeepSeekDsparkRuntimeResources> dspark;

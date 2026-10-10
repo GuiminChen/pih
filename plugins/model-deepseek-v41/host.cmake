@@ -33,7 +33,7 @@ target_compile_features(pih_deepseek_v41_sequence_cache PRIVATE cxx_std_20)
 target_link_libraries(pih_deepseek_v41_sequence_cache PRIVATE pih_core_primitives)
 pih_assert_direct_link_allowlist(pih_deepseek_v41_sequence_cache pih_core_primitives)
 set_target_properties(pih_deepseek_v41_sequence_cache PROPERTIES POSITION_INDEPENDENT_CODE ON)
-add_library(pih_deepseek_v41_boundary_plan STATIC EXCLUDE_FROM_ALL boundary_plan.cpp)
+add_library(pih_deepseek_v41_boundary_plan STATIC EXCLUDE_FROM_ALL boundary_plan.cpp packed_boundary_plan.cpp)
 target_include_directories(pih_deepseek_v41_boundary_plan PRIVATE "${PROJECT_SOURCE_DIR}/include")
 target_compile_features(pih_deepseek_v41_boundary_plan PRIVATE cxx_std_20)
 target_link_libraries(pih_deepseek_v41_boundary_plan PRIVATE pih_core_primitives)
@@ -116,7 +116,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             supervisor_request.cpp
             supervisor_deployment.cpp
             supervisor_config.cpp
-            supervisor_operation.cpp)
+            supervisor_operation.cpp
+            packed_generation_session.cpp)
         target_compile_features(pih_deepseek_v41_supervisor_request PUBLIC cxx_std_20)
         set_target_properties(pih_deepseek_v41_supervisor_request PROPERTIES POSITION_INDEPENDENT_CODE ON)
         target_link_libraries(pih_deepseek_v41_supervisor_request PRIVATE
@@ -137,6 +138,19 @@ target_link_libraries(pih_deepseek_v41_token_stop PRIVATE pih_deepseek_v41_sampl
 pih_assert_direct_link_allowlist(pih_deepseek_v41_token_stop pih_deepseek_v41_sampling_host pih_core_primitives)
 target_compile_features(pih_deepseek_v41_token_stop PRIVATE cxx_std_20)
 set_target_properties(pih_deepseek_v41_token_stop PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(PIH_BUILD_NATIVE_CONTRACT_TESTS)
+    add_executable(pih_v41_packed_request_test tests/packed_request_test.cpp)
+    target_compile_features(pih_v41_packed_request_test PRIVATE cxx_std_20)
+    target_include_directories(pih_v41_packed_request_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_link_libraries(pih_v41_packed_request_test PRIVATE pih_deepseek_v41_token_ledger)
+    pih_assert_direct_link_allowlist(pih_v41_packed_request_test pih_deepseek_v41_token_ledger)
+    add_executable(pih_v41_packed_cache_test tests/packed_cache_test.cpp)
+    target_compile_features(pih_v41_packed_cache_test PRIVATE cxx_std_20)
+    target_include_directories(pih_v41_packed_cache_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_link_libraries(pih_v41_packed_cache_test PRIVATE pih_deepseek_v41_weight_inventory pih_deepseek_v41_sequence_cache pih_deepseek_v41_engram_hash)
+    pih_assert_direct_link_allowlist(pih_v41_packed_cache_test pih_deepseek_v41_weight_inventory pih_deepseek_v41_sequence_cache pih_deepseek_v41_engram_hash)
+endif()
 
 # Preserve documented CLI locations when target ownership moves to this directory.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -23,6 +23,16 @@ TARGETS = {"rtx4090d": ("NVIDIA GeForce RTX 4090 D", "8.9", 89),
 QWEN_TOKENIZER_SHA256 = "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
 
 
+def batch_limits(sequences=32, tokens=4096, pending=64):
+    """Bounds backed by Qwen's conservative 32-sequence/4096-token reservation."""
+    if (any(type(value) is not int for value in (sequences, tokens, pending)) or
+            not 1 <= sequences <= 32 or not sequences <= tokens <= 4096 or
+            not 1 <= pending <= 4096):
+        raise ValueError("batch limits require 1..32 sequences, sequences..4096 tokens and 1..4096 pending requests")
+    return {"maximum_batch_sequences": sequences, "maximum_batch_tokens": tokens,
+            "maximum_pending_requests": pending}
+
+
 def prepare_qwen_metadata(args):
     """Copy authenticated small assets only; never parse/execute model weights."""
     if platform.system() != "Linux":
@@ -275,7 +285,9 @@ def verify_qwen_int4(args):
 
 
 def seal(bundle, model, precision, target, context, build_dir, generation_timeout_ms,
-         artifact_sha256, config_sha256):
+         artifact_sha256, config_sha256, maximum_batch_sequences=32,
+         maximum_batch_tokens=4096, maximum_pending_requests=64):
+    limits = batch_limits(maximum_batch_sequences, maximum_batch_tokens, maximum_pending_requests)
     if type(generation_timeout_ms) is not int or not 1 <= generation_timeout_ms <= 86400000:
         raise ValueError("generation-timeout-ms must be 1..86400000")
     build_dir, bundle = validate_deployment_paths(build_dir, bundle, model)
@@ -326,18 +338,18 @@ def seal(bundle, model, precision, target, context, build_dir, generation_timeou
                         ("device.cuda-runtime.v1", "pih.backend.nvidia-cuda", "pih.device.cuda-runtime.v1", 2, 1),
                         ("execution.default.v1", "pih.execution.default", "pih.execution.default.v1", 3, 2),
                         ("execution.controller.v1", "pih.execution.default", "pih.execution.controller.v1", 3, 2),
-                        ("inference.text.v2", "pih.model.qwen3", "pih.inference.text.v2", 2, 2),
+                        ("inference.text.v3", "pih.model.qwen3", "pih.inference.text.v3", 3, 2),
                         (pack_id, pack_id, "pih.qwen-kernels.v1", 3, 2),
                         ("platform.linux.v1", "pih.platform.linux", "pih.platform.linux.v1", 2, 1),
-                        ("surface.text-http.v2", "pih.surface.text-http", "pih.surface.text-http.v2", 2, 2))]
+                        ("surface.text-http.v3", "pih.surface.text-http", "pih.surface.text-http.v3", 2, 2))]
     document = {"schema": "pih.development-lock.v1", "support_status": "unsupported",
         "kernel_packs": [{"pack_id": pack_id, "pack_version": "1.0.0", "pack_abi": "pih.qwen-kernels.v1",
             "architecture": f"sm_{sm}", "binary": pack_file, "binary_sha256_hex": digest(bundle / pack_file)}],
         "plugins": plugins, "capabilities": sorted(capabilities, key=lambda item: item["capability_id"]),
-        "engine": {"capability_id": "inference.text.v2", "contract_id": "pih.inference.text.v2",
+        "engine": {"capability_id": "inference.text.v3", "contract_id": "pih.inference.text.v3",
             "activation_epoch": 1, "configuration": {"model_directory": str(model), "precision": precision,
             "maximum_context_tokens": context, "generation_timeout_ms": generation_timeout_ms,
-            "artifact_sha256": artifact_sha256, "config_sha256": config_sha256}, "smoke_http_body": {}}}
+            "artifact_sha256": artifact_sha256, "config_sha256": config_sha256, **limits}, "smoke_http_body": {}}}
     # Existing native Lock parsing is intentionally ordered, not sort_keys JSON.
     encoded = (json.dumps(document, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
     lock = bundle / f"qwen3-{target}-{precision}-{hashlib.sha256(encoded).hexdigest()[:16]}.lock"
@@ -527,6 +539,10 @@ def resolve_deepseek_service_artifact(args, build_dir, bundle):
 
 def serve_deepseek(args):
     """Compose only native PP1 providers and the text surface; no diagnostic bridge."""
+    limits = batch_limits(args.maximum_batch_sequences, args.maximum_batch_tokens,
+                          args.maximum_pending_requests)
+    if limits["maximum_batch_sequences"] > 4:
+        raise ValueError("DeepSeek PP1 development profile reserves at most 4 decode sequences")
     if not 1 <= args.generation_timeout_ms <= 86400000:
         raise ValueError("generation-timeout-ms must be 1..86400000")
     inspect_host("rtx4090d")
@@ -586,19 +602,20 @@ def serve_deepseek(args):
     for pack in base["kernel_packs"]:
         pack["binary_sha256_hex"] = digest(bundle / pack["binary"])
     base["capabilities"] = [item for item in base["capabilities"] if item["provider_id"] not in excluded]
-    if not any(item["capability_id"] == "inference.text.v2" for item in base["capabilities"]):
+    if not any(item["capability_id"] == "inference.text.v3" for item in base["capabilities"]):
         raise ValueError("source template is missing the DeepSeek native text contract")
-    base["capabilities"].append({"capability_id": "surface.text-http.v2", "provider_id": "pih.surface.text-http",
-        "contract_id": "pih.surface.text-http.v2", "threading_model": 2, "scope": 2, "cardinality": 1})
+    base["capabilities"].append({"capability_id": "surface.text-http.v3", "provider_id": "pih.surface.text-http",
+        "contract_id": "pih.surface.text-http.v3", "threading_model": 2, "scope": 2, "cardinality": 1})
     base["capabilities"].sort(key=lambda item: item["capability_id"])
     native = base["engine"]["configuration"]
     native["artifact_root_sha256_hex"] = artifact_root
     native["attention_reserved_tokens_per_sequence"] = args.max_context
-    base["engine"] = {"capability_id": "inference.text.v2", "contract_id": "pih.inference.text.v2",
-        "activation_epoch": 1, "configuration": {"schema": "pih.deepseek-v4-flash.text.v1",
+    base["engine"] = {"capability_id": "inference.text.v3", "contract_id": "pih.inference.text.v3",
+        "activation_epoch": 1, "configuration": {"schema": "pih.deepseek-v4-flash.text.v2",
             "deployment_root": str(bundle), "semantic_snapshot": str(semantic),
             "generation_timeout_ms": args.generation_timeout_ms,
-            "engine_configuration": json.dumps(native, ensure_ascii=True, separators=(",", ":"))},
+            "engine_configuration": json.dumps(native, ensure_ascii=True, separators=(",", ":")),
+            **limits},
         "smoke_http_body": {}}
     encoded = (json.dumps(base, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
     lock = bundle / f"deepseek-text-{hashlib.sha256(encoded).hexdigest()[:16]}.lock"
@@ -824,6 +841,9 @@ def main(argv=None):
     deepseek.add_argument("--artifact-tools-build-dir", type=Path, default=ROOT / "out/build/deepseek-artifact")
     deepseek.add_argument("--semantic-snapshot", type=Path, required=True)
     deepseek.add_argument("--max-context", type=int, default=4096)
+    deepseek.add_argument("--maximum-batch-sequences", type=int, default=4)
+    deepseek.add_argument("--maximum-batch-tokens", type=int, default=4096)
+    deepseek.add_argument("--maximum-pending-requests", type=int, default=64)
     deepseek.add_argument("--generation-timeout-ms", type=int, default=600000,
                           help="request preparation/generation deadline, 1..86400000 ms")
     deepseek.add_argument("--port", type=int, default=8000)
@@ -923,6 +943,9 @@ def main(argv=None):
             sub.add_argument("--precision", choices=("bf16", "int4"), default="bf16")
             sub.add_argument("--target", choices=TARGETS, required=True)
             sub.add_argument("--max-context", type=int, default=4096)
+            sub.add_argument("--maximum-batch-sequences", type=int, default=32)
+            sub.add_argument("--maximum-batch-tokens", type=int, default=4096)
+            sub.add_argument("--maximum-pending-requests", type=int, default=64)
             sub.add_argument("--generation-timeout-ms", type=int, default=600000,
                              help="Qwen request preparation/generation deadline, 1..86400000 ms")
         if command == "serve":
@@ -1019,7 +1042,8 @@ def main(argv=None):
                 build(args.build_dir, args.bundle, args.jobs, args.target)
         lock = seal(args.bundle, args.model_dir, args.precision, args.target, args.max_context,
                     args.build_dir, args.generation_timeout_ms,
-                    args.artifact_sha256, args.config_sha256)
+                    args.artifact_sha256, args.config_sha256, args.maximum_batch_sequences,
+                    args.maximum_batch_tokens, args.maximum_pending_requests)
         print(f"native Lock: {lock}", flush=True)
         if args.command == "serve":
             os.execv(str(args.bundle / "bin/pih-worker"), ["pih-worker", "--lock", str(lock), "--serve", str(args.port)])

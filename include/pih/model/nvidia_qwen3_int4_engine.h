@@ -28,7 +28,8 @@ class NvidiaQwen3Int4Engine final {
       std::span<const std::byte> artifact_bytes,
       std::string_view config_json,
       Sha256Digest expected_artifact_digest,
-      std::uint32_t provider_prepared_sm);
+      std::uint32_t provider_prepared_sm, std::uint32_t maximum_batch_sequences = 32,
+      std::uint32_t maximum_batch_tokens = 4096);
   ~NvidiaQwen3Int4Engine();
   NvidiaQwen3Int4Engine(const NvidiaQwen3Int4Engine&)=delete;
   NvidiaQwen3Int4Engine& operator=(const NvidiaQwen3Int4Engine&)=delete;
@@ -36,6 +37,7 @@ class NvidiaQwen3Int4Engine final {
       std::span<const std::int64_t> prompt,
       std::uint32_t maximum_new_tokens,
       const ControllerRequestSampling& sampling);
+  Status bind_packed_thread();
   Status cancel_packed(std::uint64_t request_generation);
   Result<NvidiaQwenPackedStep> drive_packed();
   Result<std::optional<NvidiaQwenPackedOutputEvent>> try_take_packed_event();
@@ -51,7 +53,8 @@ class NvidiaQwen3Int4Engine final {
       Sha256Digest expected_artifact_digest,
       std::span<const std::byte> artifact_bytes,
       std::string_view config_json,
-      std::uint32_t provider_prepared_sm);
+      std::uint32_t provider_prepared_sm, std::uint32_t maximum_batch_sequences = 32,
+      std::uint32_t maximum_batch_tokens = 4096);
   struct State;
   explicit NvidiaQwen3Int4Engine(std::unique_ptr<State> state);
   std::unique_ptr<State> state_;

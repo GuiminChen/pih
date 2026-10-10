@@ -1,6 +1,12 @@
 # 原生集成状态
 [English](integration-status.md) | 中文
 
+原生批处理修订包含文本 ABI v3、常驻多请求执行者及 V4.1 packed kernel。
+2026-10-09 从当前源码重建四个生产 CMake 配置，全部完成 CUDA 机器码编译、最终链接
+及全新目录安装，62 个 ELF/设备产品检查通过；CPU 批处理验收 10/10 个目标通过。
+下方证据适用于本次修订，但不代表 Linux 服务运行或 GPU 资格验证通过。
+见[批处理状态与硬件命令](batching.zh.md)。
+
 本次交付区分代码/构建验收与硬件资格验证。生产矩阵覆盖 Qwen3-0.6B
 RTX 4090 D（SM89）/H100 PCIe（SM90）、DeepSeek V4-0731 RTX 4090 D PP1
 （SM89）、DeepSeek V4.1 B300 文本 backbone（SM103、2/4/8 ranks）。

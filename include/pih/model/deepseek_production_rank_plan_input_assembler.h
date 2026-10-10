@@ -19,6 +19,8 @@ struct DeepSeekProductionRankPlanSeed final {
   DeepSeekAttentionSequenceBinding attention_binding;
   std::optional<DeepSeekPreparedSamplingInput> sampling;
   std::uint32_t table_position_count = 0;
+  std::vector<DeepSeekAttentionSequenceBinding> attention_bindings;
+  std::vector<std::optional<DeepSeekPreparedSamplingInput>> sequence_sampling;
 };
 
 struct DeepSeekProductionRankResolvedInput final {
@@ -34,6 +36,7 @@ struct DeepSeekProductionRankResolvedInput final {
   std::vector<DeepSeekBoundDsparkMtpStageWork> dspark_mtp;
 #endif
   std::vector<std::shared_ptr<const void>> additional_lifetime_backings;
+  std::vector<DeepSeekEndpointStageSequenceWork> packed_endpoint;
 };
 
 class DeepSeekProductionRankPlanInputAssembler final

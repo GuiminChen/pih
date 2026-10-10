@@ -399,7 +399,7 @@ if(PIH_BUILD_NATIVE_ENGRAM_NCCL)
     set_target_properties(pih_deepseek_v41_head_operation PROPERTIES POSITION_INDEPENDENT_CODE ON)
     add_library(pih_deepseek_v41_block_operation STATIC EXCLUDE_FROM_ALL
         "${CMAKE_CURRENT_LIST_DIR}/block_operation.cpp" "${CMAKE_CURRENT_LIST_DIR}/block_sequence.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/backbone_operation.cpp")
+        "${CMAKE_CURRENT_LIST_DIR}/backbone_operation.cpp" "${CMAKE_CURRENT_LIST_DIR}/packed_backbone_operation.cpp")
     target_include_directories(pih_deepseek_v41_block_operation PRIVATE "${PROJECT_SOURCE_DIR}/include")
     target_link_libraries(pih_deepseek_v41_block_operation PRIVATE
         pih_deepseek_v41_engram_plan
@@ -423,8 +423,9 @@ if(PIH_BUILD_NATIVE_ENGRAM_NCCL)
         pih_deepseek_v41_engram_cuda pih_deepseek_v41_engram_nccl pih_core_primitives)
     target_compile_features(pih_deepseek_v41_block_operation PRIVATE cxx_std_20)
     set_target_properties(pih_deepseek_v41_block_operation PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    add_library(pih_deepseek_v41_inference_operation STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/inference_operation.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/inference_memory.cpp" "${CMAKE_CURRENT_LIST_DIR}/inference_memory_owner.cpp")
+    add_library(pih_deepseek_v41_inference_operation STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/inference_operation.cpp" "${CMAKE_CURRENT_LIST_DIR}/packed_inference_operation.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/inference_memory.cpp" "${CMAKE_CURRENT_LIST_DIR}/inference_memory_owner.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/packed_inference_memory.cpp" "${CMAKE_CURRENT_LIST_DIR}/packed_inference_memory_owner.cpp")
     target_include_directories(pih_deepseek_v41_inference_operation PRIVATE "${PROJECT_SOURCE_DIR}/include")
     target_compile_features(pih_deepseek_v41_inference_operation PRIVATE cxx_std_20)
     target_link_libraries(pih_deepseek_v41_inference_operation PRIVATE pih_deepseek_v41_block_operation
@@ -432,17 +433,19 @@ if(PIH_BUILD_NATIVE_ENGRAM_NCCL)
         pih_deepseek_v41_step_phases pih_deepseek_v41_engram_plan pih_deepseek_v41_sequence_cache
         pih_deepseek_v41_ffn_plan pih_deepseek_v41_attention_prepare_plan pih_deepseek_v41_attention_output_plan
         pih_deepseek_v41_compressor_plan pih_deepseek_v41_indexer_plan
-        pih_deepseek_v41_boundary_plan pih_deepseek_v41_embedding_operation pih_deepseek_v41_head_operation
+        pih_deepseek_v41_boundary_plan pih_deepseek_v41_embedding_operation pih_deepseek_v41_head_operation pih_deepseek_v41_token_input_upload
         pih_deepseek_v41_sampling_operation pih_deepseek_v41_sampling_cuda pih_deepseek_v41_uploaded_bindings pih_core_primitives)
     pih_assert_direct_link_allowlist(pih_deepseek_v41_inference_operation pih_deepseek_v41_block_operation
         pih_deepseek_v41_token_ledger
         pih_deepseek_v41_step_phases pih_deepseek_v41_engram_plan pih_deepseek_v41_sequence_cache
         pih_deepseek_v41_ffn_plan pih_deepseek_v41_attention_prepare_plan pih_deepseek_v41_attention_output_plan
         pih_deepseek_v41_compressor_plan pih_deepseek_v41_indexer_plan
-        pih_deepseek_v41_boundary_plan pih_deepseek_v41_embedding_operation pih_deepseek_v41_head_operation
+        pih_deepseek_v41_boundary_plan pih_deepseek_v41_embedding_operation pih_deepseek_v41_head_operation pih_deepseek_v41_token_input_upload
         pih_deepseek_v41_sampling_operation pih_deepseek_v41_sampling_cuda pih_deepseek_v41_uploaded_bindings pih_core_primitives)
     set_target_properties(pih_deepseek_v41_inference_operation PROPERTIES POSITION_INDEPENDENT_CODE ON)
     add_library(pih_deepseek_v41_rank_worker_loop STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/rank_worker_loop.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/packed_rank_worker_loop.cpp" "${CMAKE_CURRENT_LIST_DIR}/packed_worker_memory.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/packed_worker_runtime.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/worker_handles.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/worker_memory.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/worker_runtime.cpp"
@@ -476,8 +479,8 @@ if(PIH_BUILD_NATIVE_ENGRAM_NCCL)
 
     add_library(pih_deepseek_v41_prepared_block STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/prepared_block.cpp")
     target_include_directories(pih_deepseek_v41_prepared_block PRIVATE "${PROJECT_SOURCE_DIR}/include")
-    target_link_libraries(pih_deepseek_v41_prepared_block PRIVATE pih_deepseek_v41_attention_nccl pih_deepseek_v41_attention_residual pih_deepseek_v41_ffn_nccl pih_deepseek_v41_ffn_route pih_deepseek_v41_expert_residual pih_deepseek_v41_expert_workspace pih_core_primitives)
-    pih_assert_direct_link_allowlist(pih_deepseek_v41_prepared_block pih_deepseek_v41_attention_nccl pih_deepseek_v41_attention_residual pih_deepseek_v41_ffn_nccl pih_deepseek_v41_ffn_route pih_deepseek_v41_expert_residual pih_deepseek_v41_expert_workspace pih_core_primitives)
+    target_link_libraries(pih_deepseek_v41_prepared_block PRIVATE pih_deepseek_v41_attention_nccl pih_deepseek_v41_attention_residual pih_deepseek_v41_ffn_nccl pih_deepseek_v41_ffn_route pih_deepseek_v41_expert_residual pih_deepseek_v41_expert_workspace pih_core_primitives CUDA::cudart)
+    pih_assert_direct_link_allowlist(pih_deepseek_v41_prepared_block pih_deepseek_v41_attention_nccl pih_deepseek_v41_attention_residual pih_deepseek_v41_ffn_nccl pih_deepseek_v41_ffn_route pih_deepseek_v41_expert_residual pih_deepseek_v41_expert_workspace pih_core_primitives CUDA::cudart)
     target_compile_features(pih_deepseek_v41_prepared_block PRIVATE cxx_std_20)
     set_target_properties(pih_deepseek_v41_prepared_block PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

@@ -67,7 +67,7 @@ Status DeepSeekDenseAttentionStageOperatorBackend::launch(
   }
   auto resolved = provider_->resolve(command, plan);
   if (!resolved.ok()) return poison(resolved.status());
-  if (resolved->empty() || resolved->size() != plan.sequence_count) {
+  if (resolved->empty() || (resolved->size() != plan.sequence_count && !(resolved->size() == 1 && resolved->front().packed_tokens))) {
     return poison(Status::InvalidArgument(
         "DeepSeek dense attention work count does not match packed plan"));
   }

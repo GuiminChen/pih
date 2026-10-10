@@ -1,9 +1,11 @@
 find_package(ICU REQUIRED COMPONENTS uc i18n)
+find_package(Threads REQUIRED)
 include("${CMAKE_CURRENT_LIST_DIR}/../kernels/deepseek-v4-sm89/validation.cmake")
 add_library(
     pih_plugin_model_deepseek_v4_flash SHARED
     entrypoint.cpp
     generation.cpp
+    batch_generation.cpp
     text_completion.cpp
     ../../src/backend/cuda/cuda_runtime_resources.cpp
     ../../src/backend/cuda/owned_cuda_runtime_resources.cpp
@@ -23,6 +25,7 @@ target_link_libraries(
         pih_output_burst_credits
         pih_deepseek_launch_contracts
         ICU::uc ICU::i18n
+        Threads::Threads
 )
 pih_assert_direct_link_allowlist(
     pih_plugin_model_deepseek_v4_flash
@@ -31,6 +34,7 @@ pih_assert_direct_link_allowlist(
     pih_output_burst_credits
     pih_deepseek_launch_contracts
     ICU::uc ICU::i18n
+    Threads::Threads
 )
 target_compile_features(pih_plugin_model_deepseek_v4_flash PRIVATE cxx_std_20)
 target_compile_definitions(

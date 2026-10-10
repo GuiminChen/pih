@@ -20,8 +20,9 @@ pih_assert_direct_link_allowlist(pih_qwen3_native_impl CUDA::cuda_driver CUDA::c
 set_target_properties(pih_qwen3_native_impl PROPERTIES POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 add_library(pih_plugin_model_qwen3 SHARED entrypoint.cpp tokenizer.cpp ../common/bytelevel_tokenizer.cpp)
-target_link_libraries(pih_plugin_model_qwen3 PRIVATE PIH::plugin_sdk pih_qwen3_native_impl ICU::uc ICU::i18n)
-pih_assert_direct_link_allowlist(pih_plugin_model_qwen3 PIH::plugin_sdk pih_qwen3_native_impl ICU::uc ICU::i18n)
+find_package(Threads REQUIRED)
+target_link_libraries(pih_plugin_model_qwen3 PRIVATE PIH::plugin_sdk pih_qwen3_native_impl ICU::uc ICU::i18n Threads::Threads)
+pih_assert_direct_link_allowlist(pih_plugin_model_qwen3 PIH::plugin_sdk pih_qwen3_native_impl ICU::uc ICU::i18n Threads::Threads)
 target_link_options(pih_plugin_model_qwen3 PRIVATE "LINKER:-z,defs" "LINKER:--gc-sections"
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
 set_property(TARGET pih_plugin_model_qwen3 APPEND PROPERTY LINK_DEPENDS

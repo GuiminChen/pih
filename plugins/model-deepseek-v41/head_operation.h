@@ -2,6 +2,7 @@
 #include "block_sequence.h"
 #include "model_head.h"
 #include "uploaded_bindings.h"
+#include "packed_request.h"
 
 namespace pih::deepseek_v41 {
 enum class HeadOperationState { kWaitingGather, kWaitingCompletion, kComplete, kFailed };
@@ -18,13 +19,22 @@ class HeadOperation final {
   static Result<HeadOperation> Start(BlockSequence& sequence, ModelHeadLaunch launch, const BackboneWeightUpload& weights,
       EngramDeviceRegion logits, std::uintptr_t communicator,
       const EngramCompletionResources& resources, Clock::time_point deadline);
+  static Result<HeadOperation> StartPacked(const PackedRequest& plan,
+      std::span<BlockSequence* const> sequences, ModelHeadLaunch launch, const BackboneWeightUpload& weights,
+      EngramDeviceRegion gathered_logits, EngramDeviceRegion logits, std::uintptr_t communicator,
+      const EngramCompletionResources& resources, Clock::time_point deadline);
   Result<HeadOperationState> Advance();
   Result<EngramDeviceRegion> Logits() const;
+  Result<EngramDeviceRegion> PackedLogits(std::uint32_t member) const;
  private:
   friend class SamplingOperation;
   HeadOperation() = default;
   Result<HeadOperationState> AdvanceImpl();
   BlockSequence* sequence_ = nullptr;
+  std::vector<BlockSequence*> packed_sequences_;
+  std::vector<std::uint32_t> packed_ends_;
+  EngramDeviceRegion gathered_logits_{};
+  std::uint32_t world_{};
   EngramDeviceRegion logits_{}, error_{};
   std::uintptr_t stream_ = 0;
   std::uint32_t step_end_ = 0;

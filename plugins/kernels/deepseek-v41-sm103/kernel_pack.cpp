@@ -86,6 +86,9 @@ pih_status_v1 Launch(const pih_v41_kernel_command_v1* command) noexcept {
       case 39: return Convert(Decode<AttentionLocalOutputLaunch>(*command, RoundAttentionOutput));
       case 40: return Convert(Decode<kernel_wire::MhcInitialLaunch>(*command,
           [](const auto& x) { return LaunchMhcInitialPre(x.pre, x.tokens, x.stream); }));
+      case 41: return Convert(Decode<kernel_wire::PackedHeadLaunch>(*command,
+          [](const auto& x) { return LaunchHeadProjection(x.projection); }));
+      case 42: return Convert(Decode<PackedLogitsTransposeLaunch>(*command, LaunchPackedLogitsTranspose));
       default: return Convert(Status::InvalidArgument("SM103 kernel operation unsupported"));
     }
   } catch (const std::bad_alloc&) { return Convert(Status::ResourceExhausted("SM103 kernel allocation failed")); }
@@ -108,7 +111,7 @@ pih_status_v1 AdmitDevice(int32_t ordinal) noexcept {
   } catch (...) { return Convert(Status::Internal("B300 device admission failed")); }
 }
 constexpr pih_v41_sm103_kernels_api_v1 contract{
-  sizeof(contract), PIH_V41_KERNEL_ABI_V1, &identity, 103, 40, AdmitDevice, Launch};
+  sizeof(contract), PIH_V41_KERNEL_ABI_V1, &identity, 103, 42, AdmitDevice, Launch};
 // Embedded device images have no external artifacts, but use the same
 // mandatory host binding contract. No driver or device call occurs here.
 pih_status_v1 BindOrigin(const char* path) noexcept {

@@ -12,3 +12,5 @@
 - [DeepSeek V4.1 Flash / B300 接入](deepseek-v41-b300.zh.md)
 
 当前预览验证原生能力组合，尚无通过资格验证的模型/GPU Profile，也没有通用的 `pih serve` 命令。Python wheel 只包含 HTTP 客户端与主机诊断，并非原生插件 Bundle，也不包含旧推理兼容层。
+
+- [原生多序列批处理](batching.zh.md)

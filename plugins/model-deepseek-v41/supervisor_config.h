@@ -19,6 +19,8 @@ struct SupervisorConfig final {
   SupervisorRequestBudgets budgets;
   std::uint32_t maximum_positions = 0, startup_ms = 0, sequence_ms = 0, retirement_ms = 0, grace_ms = 0;
   std::uint64_t first_plan = 0;
+  std::uint32_t maximum_batch_sequences = 1, maximum_batch_tokens = 4096,
+      maximum_pending_requests = 64;
   // Ordered rank-local artifacts/device/budgets plus common model fields.
   // Runtime sets PID/UID, absolute deadlines, fresh endpoint names and request
   // sequence fields. NCCL IDs remain zero until SupervisorOperation binds them.

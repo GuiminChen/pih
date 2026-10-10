@@ -7,7 +7,9 @@ namespace pih {
 Result<DeepSeekEndpointRuntimeResources>
 DeepSeekEndpointRuntimeResources::Allocate(
     DeepSeekStagePlan stage, DeepSeekEndpointSequenceOperations* operations,
-    RegisteredPinnedAllocator& allocator) {
+    RegisteredPinnedAllocator& allocator, std::uint32_t maximum_sequences) {
+  if (maximum_sequences == 0 || maximum_sequences > 4096)
+    return Status::InvalidArgument("DeepSeek endpoint sequence capacity invalid");
   if (stage.layers.first_layer > stage.layers.last_layer ||
       stage.layers.last_layer >= 43) {
     return Status::InvalidArgument(
@@ -61,13 +63,20 @@ DeepSeekEndpointRuntimeResources::Allocate(
       static_cast<std::uint32_t*>(owned_top_ids->data()),
       static_cast<float*>(owned_top_logprobs->data()));
   if (!executor.ok()) return executor.status();
-  return DeepSeekEndpointRuntimeResources(
+  DeepSeekEndpointRuntimeResources result(
       stage, std::move(owned_error),
       std::move(owned_sampled),
       std::move(owned_logprob), std::move(owned_rng),
       std::move(owned_top_ids), std::move(owned_top_logprobs),
       std::make_unique<DeepSeekEndpointSequenceExecutor>(
           std::move(*executor)));
+  for (std::uint32_t index = 1; index < maximum_sequences; ++index) {
+    auto sequence = Allocate(stage, operations, allocator, 1);
+    if (!sequence.ok()) return sequence.status();
+    result.additional_sequences_.push_back(
+        std::make_unique<DeepSeekEndpointRuntimeResources>(std::move(*sequence)));
+  }
+  return result;
 }
 
 Result<DeepSeekSamplingResult>

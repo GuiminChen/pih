@@ -44,6 +44,7 @@ class DeepSeekEngine final {
   DeepSeekEngine& operator=(DeepSeekEngine&& other) noexcept;
 
   Status admit_request();
+  Status bind_execution_thread();
   Status submit_request(std::uint64_t request_id,
                         std::uint64_t request_generation);
   Status cancel_request(std::uint64_t request_id,
@@ -165,6 +166,8 @@ class DeepSeekEngine final {
   bool bound_sampled_token_staged_ = false;
   std::optional<DeepSeekRequestSamplingConfig> bound_sampling_config_;
   std::optional<DeepSeekPreparedSamplingInput> bound_sampling_;
+  std::vector<std::optional<DeepSeekRequestSamplingConfig>> bound_sequence_sampling_configs_;
+  std::vector<std::optional<DeepSeekPreparedSamplingInput>> bound_sequence_sampling_;
   DeepSeekEngineState state_ = DeepSeekEngineState::kReady;
   DeepSeekEngineFailure failure_ = DeepSeekEngineFailure::kNone;
   std::chrono::steady_clock::time_point next_artifact_poll_{};

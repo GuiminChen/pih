@@ -138,3 +138,13 @@ object target explicitly; that workflow has not been executed for this change.
 后续 24 个适配器迁移后，非 CUDA 编译数据库的文件集合和原生宏再次校验通过，
 更新后的后端语法选择共 51 个文件也已通过。CI 已显式加入适配对象目标，
 但该工作流变更尚未运行。
+
+## Native continuous batching
+
+The text capability is `inference.text.v3` / `pih.inference.text.v3` with concurrent callers. Text configuration schema `pih.deepseek-v4-flash.text.v2` adds `maximum_batch_sequences`, `maximum_batch_tokens`, and `maximum_pending_requests`. Sequence capacity must not exceed the sealed decode capacity; token budget is 1..4096, at least the sequence limit and no greater than the sealed prefill budget; pending requests are 1..4096.
+
+One native executor owns the production pipeline. Each plan packs one current token from every selected sequence into shared dense, mHC and router computation, with separate sparse-attention transactions, recent/compressor state and sampling receipts. Prefill and decode groups rotate fairly; prefill processes one token per sequence per plan so later ring writes cannot invalidate earlier attention reads. A bounded output queue pauses an individual slow sequence while peers continue; synchronous sink callbacks stay on the caller thread.
+
+CPU simulation covers batch sizes 1, 2 and 4, varied prompt lengths, independent cancellation, slow consumers, queue rejection, queued deadline expiry and rank permutation agreement. Changed native C++ and CUDA bootstrap sources were compiled to objects with pinned headers. GPU numerical parity and throughput remain hardware acceptance work; a larger configured batch is not evidence of GPU validation. The legacy token-generation ABI remains serialized; continuous batching is exposed through the text capability.
+
+中文：文本能力升级到并发 v3；配置 schema 升级到 `pih.deepseek-v4-flash.text.v2`，需配置上述三个有界批处理参数。每个生产计划把多条序列的当前 token 放入同一份 dense/mHC/router 计算，稀疏注意力与采样资源按序列隔离。每条序列的 prefill 每计划只推进一个 token，保证 recent KV 环形缓冲区依赖安全。取消、超时和慢客户端只影响对应请求，输出回调仍在调用者线程执行。CPU 模拟已覆盖 batch=1/2/4；GPU 数值与性能验证仍需硬件验收。旧 token-generation ABI 继续串行，持续合批通过文本能力提供。

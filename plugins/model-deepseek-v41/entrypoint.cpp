@@ -1,11 +1,12 @@
-#include "supervisor_execution.h"
-#include "pih/contracts/text_inference_v2.h"
+#include "supervisor_batch_execution.h"
+#include "pih/contracts/text_inference_v3.h"
 #include "pih/plugin_sdk/abi.h"
 #include "../common/text_json.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <atomic>
 #include <stdexcept>
 #include <unicode/unistr.h>
 
@@ -16,10 +17,12 @@ constexpr std::string_view model_id = "deepseek-ai/DeepSeek-V4.1-Flash";
 struct State {
   const pih_host_api_v1* host{};
   uint32_t phase{};
-  bool failed{};
+  std::atomic<bool> failed{};
+  std::atomic<uint32_t> active_calls{0}, concurrent_capacity{0};
+  std::atomic<uint64_t> response_id{1};
   std::mutex mutex;
   std::unique_ptr<SupervisorDeployment> deployment;
-  std::unique_ptr<SupervisorExecution> active;
+  std::unique_ptr<SupervisorBatchExecution> active;
 } state;
 pih_status_v1 Convert(const Status& s) {
   pih_status_v1 out{}; out.struct_size = sizeof(out); out.abi_version = PIH_STATUS_ABI_VERSION_V1;
@@ -86,7 +89,7 @@ std::string RenderChat(const JsonValue& messages) {
   return out;
 }
 struct Output {
-  const pih_text_output_sink_v2& sink;
+  const pih_text_output_sink_v3& sink;
   bool streaming, chat;
   std::string identity, pending, text;
   size_t emitted_bytes{};
@@ -120,6 +123,10 @@ struct Output {
     if (streaming) return Chunk(decoded) ? Status::Ok() : Status::Unavailable("V4.1 client output cancelled");
     text += decoded; return Status::Ok();
   }
+  static Status Started(void* context) {
+    auto& x = *static_cast<Output*>(context);
+    return !x.sink.cancelled(x.sink.context) && x.sink.start(x.sink.context, x.streaming ? 1 : 0) == 1 ? Status::Ok() : Status::Unavailable("V4.1 request cancelled before submission");
+  }
   static Result<size_t> Write(void* context, std::string_view bytes) {
     auto& x=*static_cast<Output*>(context);
     if (x.sink.cancelled(x.sink.context)) return Status::Unavailable("V4.1 client output cancelled");
@@ -148,20 +155,34 @@ pih_status_v1 Load(void* context, const char* bytes, uint64_t size) noexcept {
     if(config->sampling.logprobs || config->sampling.top_count) return Status::InvalidArgument("V4.1 HTTP logprobs not enabled");
     auto process=AdmitSupervisorProcess(); if(!process.ok()) return process;
     auto deployment=SupervisorDeployment::Create(std::move(*config)); if(!deployment.ok()) return deployment.status();
-    state.deployment=std::move(*deployment); return Status::Ok();
+    if (deployment->get()->configuration().placements.empty() || !deployment->get()->configuration().placements[0].packed_requests) return Status::InvalidArgument("V4.1 text service requires sealed supervisor schema v2");
+    state.deployment=std::move(*deployment);
+    auto batch = SupervisorBatchExecution::Create(*state.deployment);
+    if (!batch.ok()) { state.failed = true; return batch.status(); }
+    state.active = std::move(*batch);
+    auto started = state.active->startup_status();
+    if (!started.ok()) { state.failed = true; return started; }
+    state.concurrent_capacity = state.deployment->configuration().maximum_batch_sequences + state.deployment->configuration().maximum_pending_requests;
+    return Status::Ok();
   });
 }
 pih_status_v1 Complete(void* context,uint32_t chat,const char* bytes,uint64_t size,
-    char* response,uint64_t capacity,uint64_t* written,const pih_text_output_sink_v2* sink) noexcept {
+    char* response,uint64_t capacity,uint64_t* written,const pih_text_output_sink_v3* sink) noexcept {
   if(written) *written=0;
+  const auto received = std::chrono::steady_clock::now();
   return Guard([&]() -> Status {
     if(context!=&state || chat>1 || !response || !written || capacity<1024 || !sink ||
-        sink->struct_size!=sizeof(*sink) || sink->contract_version!=PIH_TEXT_INFERENCE_ABI_V2 ||
+        sink->struct_size!=sizeof(*sink) || sink->contract_version!=PIH_TEXT_INFERENCE_ABI_V3 ||
         !sink->context || !sink->start || !sink->write || !sink->cancelled)
       return Status::InvalidArgument("invalid text contract");
-    std::unique_lock lock(state.mutex,std::try_to_lock);
-    if(!lock.owns_lock()) return Status::Unavailable("V4.1 engine busy");
-    if(state.phase!=4 || state.failed || !state.deployment || state.active) return Status::FailedPrecondition("V4.1 engine not ready");
+    std::unique_lock lock(state.mutex);
+    if(state.phase!=4 || state.failed || !state.deployment || !state.active) return Status::FailedPrecondition("V4.1 engine not ready");
+    if (state.active_calls.load() >= state.concurrent_capacity.load()) return Status::ResourceExhausted("V4.1 concurrent request capacity full");
+    struct Call { std::atomic<uint32_t>& count; ~Call() { --count; } } call{state.active_calls};
+    ++state.active_calls;
+    const auto deadline = received + std::chrono::milliseconds(state.deployment->configuration().sequence_ms);
+    lock.unlock();
+    if (std::chrono::steady_clock::now() >= deadline) return Status::DeadlineExceeded("V4.1 request deadline elapsed before parsing");
     auto body=Parse(bytes,size,1U<<20);
     for(const auto& [key,unused]:body.object())
       if(key!="model" && key!=(chat?"messages":"prompt") && key!="stream" && key!="max_tokens" &&
@@ -186,24 +207,20 @@ pih_status_v1 Complete(void* context,uint32_t chat,const char* bytes,uint64_t si
       if(x->is_array()) { for(const auto& p:x->array()) append(p); } else append(*x);
     }
     const auto prompt=chat?RenderChat(Field(body,"messages")):Field(body,"prompt").string();
-    auto admitted=state.deployment->Admit(prompt,sampling,std::move(stopping));
-    if(!admitted.ok()) return admitted.status();
-    const auto generation=(*admitted)->ledger().identity().sequence_generation;
+    auto policy = ValidateSupervisorRequestPolicy(config, prompt, sampling, stopping);
+    if (!policy.ok()) return policy;
+    auto generation = state.response_id.load();
+    for (;;) {
+      if (generation == UINT64_MAX) return Status::ResourceExhausted("V4.1 response identity exhausted");
+      if (state.response_id.compare_exchange_weak(generation, generation + 1)) break;
+    }
     const auto created=std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     Output output{*sink,streaming,chat!=0,
       "{\"id\":\"pih-v41-"+std::to_string(generation)+"\",\"created\":"+std::to_string(created)+
       ",\"model\":"+plugin_text::QuoteText(model_id)+","};
-    if(sink->cancelled(sink->context) || sink->start(sink->context,streaming?1:0)!=1)
-      return Status::Unavailable("V4.1 request cancelled before submission");
-    state.active=std::make_unique<SupervisorExecution>(std::move(*admitted));
-    auto generated=state.active->Run(config,&output,Output::Write,Output::Cancelled);
-    if(!state.active->retired()) {
-      state.failed=true; return Status::Internal("V4.1 retirement unresolved; provider unload forbidden");
-    }
-    state.active.reset();
+    auto generated=state.active->Run(prompt,sampling,std::move(stopping),&output,Output::Write,Output::Cancelled,Output::Started,deadline);
     if(!generated.ok()) {
-      if(generated.status().code()!=StatusCode::kUnavailable && generated.status().code()!=StatusCode::kDeadlineExceeded)
-        state.failed=true;
+      if (!state.active->healthy()) state.failed = true;
       return generated.status();
     }
     if(sink->cancelled(sink->context)) return Status::Unavailable("V4.1 final output cancelled");
@@ -226,11 +243,13 @@ pih_status_v1 Close(void* context) noexcept {
     if(context!=&state) return Status::InvalidArgument("invalid engine context");
     std::unique_lock lock(state.mutex,std::try_to_lock);
     if(!lock.owns_lock()) return Status::Unavailable("V4.1 request active");
-    if(state.active && !state.active->retired()) return Status::Internal("V4.1 retirement unresolved");
+    if (state.active_calls.load()) return Status::Unavailable("V4.1 requests active");
+    state.concurrent_capacity = 0;
+    if (state.active) { auto closed = state.active->Close(); if (!closed.ok() || !state.active->retired()) { state.failed = true; return closed.ok() ? Status::Internal("V4.1 retirement unresolved") : closed; } }
     state.active.reset(); state.deployment.reset(); return Status::Ok();
   });
 }
-pih_text_inference_api_v2 inference{sizeof(inference),PIH_TEXT_INFERENCE_ABI_V2,&state,"deepseek-ai/DeepSeek-V4.1-Flash",Load,Complete,Close};
+pih_text_inference_api_v3 inference{sizeof(inference),PIH_TEXT_INFERENCE_ABI_V3,&state,"deepseek-ai/DeepSeek-V4.1-Flash",Load,Complete,Close,[](void* context) noexcept -> uint32_t { return context == &state && !state.failed.load() ? state.concurrent_capacity.load() : 0; }};
 pih_status_v1 Advance(void* c,uint32_t expected) noexcept {
   if(c!=&state || state.phase!=expected) return Convert(Status::FailedPrecondition("plugin lifecycle order invalid"));
   ++state.phase; return Convert(Status::Ok());
@@ -238,7 +257,7 @@ pih_status_v1 Advance(void* c,uint32_t expected) noexcept {
 pih_status_v1 Register(void* c) noexcept {
   if(c!=&state || !state.host || state.phase) return Convert(Status::FailedPrecondition("plugin registration invalid"));
   const pih_capability_v1 capability{sizeof(capability),PIH_CAPABILITY_ABI_VERSION_V1,
-      "inference.text.v2","pih.inference.text.v2",&inference,PIH_CAPABILITY_THREADING_SERIALIZED_V1,
+      "inference.text.v3","pih.inference.text.v3",&inference,PIH_CAPABILITY_THREADING_CONCURRENT_V1,
       PIH_CAPABILITY_SCOPE_ACTIVATION_V1,PIH_CAPABILITY_CARDINALITY_EXACTLY_ONE_V1};
   const auto status=state.host->register_capability(state.host->context,&capability);
   if(!pih_status_is_valid_v1(&status)) return Convert(Status::Internal("host registration status invalid"));
